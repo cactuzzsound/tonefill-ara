@@ -1,0 +1,9 @@
+build/
+cmake-build-*/
+.cache/
+compile_commands.json
+*.user
+.DS_Store
+
+# external dependencies (JUCE via -DJUCE_DIR, ARA SDK cloned)
+external/

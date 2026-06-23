@@ -1,0 +1,22 @@
+# Submodule reference for ToneFill ARA.
+#
+# This file is intentionally left as a COMMENTED reference so it does not collide with the
+# `git submodule add` commands in docs/SETUP.md (which write their own entries). After you run
+# the setup steps, your real .gitmodules will contain the two active blocks shown below.
+#
+# Mandatory submodules: JUCE + ARA_SDK only.
+#   * VST3 SDK is NOT a submodule — JUCE ships VST3 support in its own tree.
+#   * Catch2 is fetched by tests/CMakeLists.txt via FetchContent (no submodule).
+#
+# Pins (see docs/SETUP.md for the exact commands and how to verify compatibility):
+#
+# [submodule "external/JUCE"]
+#     path = external/JUCE
+#     url  = https://github.com/juce-framework/JUCE.git
+#     # pinned commit: tag 7.0.12 (last JUCE 7.0.x; has IS_ARA_EFFECT + juce_set_ara_sdk_path)
+#
+# [submodule "external/ARA_SDK"]
+#     path = external/ARA_SDK
+#     url  = https://github.com/Celemony/ARA_SDK.git
+#     # pinned commit: an ARA 2.x release tag compatible with the JUCE pin above
+#     #                (list with `git -C external/ARA_SDK tag`; see SETUP.md)

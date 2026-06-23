@@ -1,0 +1,79 @@
+#pragma once
+
+#ifndef TONEFILL_ARA_AVAILABLE
+ #define TONEFILL_ARA_AVAILABLE 0
+#endif
+
+#if TONEFILL_ARA_AVAILABLE
+
+#include <juce_audio_processors/juce_audio_processors.h>
+
+#include <atomic>
+#include <map>
+#include <memory>
+#include <vector>
+
+namespace tonefill::plugin::ara
+{
+// Debug trace to ~/tonefill_ara.log (temporary, for bringing up the ARA path).
+void araLog (const juce::String& msg);
+
+// Small lock interface (mirrors the JUCE ARA demo): the document controller hands the renderer
+// a try-read-lock so editing on the model thread can safely block audio-thread rendering.
+struct ProcessingLockInterface
+{
+    virtual ~ProcessingLockInterface() = default;
+    virtual juce::ScopedTryReadLock getProcessingLock() = 0;
+};
+
+// ARA playback renderer that REPLACES the region with synthesized room tone.
+//
+// Threading: analysis + fill render happen ONCE on a background thread (heavy; reads the ARA
+// source off the audio thread). processBlock (audio thread) copies the precomputed fill, looped
+// across the region. Until the fill is ready it outputs silence (no RT-thread source reading).
+class ToneFillPlaybackRenderer : public juce::ARAPlaybackRenderer
+{
+public:
+    ToneFillPlaybackRenderer (ARA::PlugIn::DocumentController* dc, ProcessingLockInterface& lock);
+    ~ToneFillPlaybackRenderer() override;
+
+    void prepareToPlay (double sampleRate, int maximumSamplesPerBlock, int numChannels,
+                        juce::AudioProcessor::ProcessingPrecision,
+                        AlwaysNonRealtime alwaysNonRealtime) override;
+
+    void releaseResources() override;
+
+    bool processBlock (juce::AudioBuffer<float>& buffer,
+                       juce::AudioProcessor::Realtime realtime,
+                       const juce::AudioPlayHead::PositionInfo& positionInfo) noexcept override;
+
+    using juce::ARAPlaybackRenderer::processBlock;
+
+private:
+    struct FillData
+    {
+        std::vector<std::vector<float>> channels; // [ch][sample]
+        long long length = 0;
+    };
+
+    class FillWorker; // background analyze+render thread (defined in .cpp)
+
+    ProcessingLockInterface& lockInterface;
+
+    double sampleRate = 48000.0;
+    int    numChannels = 0;
+    int    maximumSamplesPerBlock = 0;
+
+    // Re-published by the worker on every re-render. The audio thread copies it under a brief
+    // try-lock; if it can't (worker swapping), it reuses nothing for that block (rare).
+    std::shared_ptr<const FillData> fill;
+    juce::SpinLock                  fillLock;
+    std::atomic<bool>               fillReady { false };
+    std::atomic<bool>               analysisStarted { false };
+    std::unique_ptr<FillWorker>     worker;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ToneFillPlaybackRenderer)
+};
+} // namespace tonefill::plugin::ara
+
+#endif // TONEFILL_ARA_AVAILABLE
