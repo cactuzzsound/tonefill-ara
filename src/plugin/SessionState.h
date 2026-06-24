@@ -46,11 +46,19 @@ struct SessionState
         return exportFill_;
     }
 
+    // Downsampled source waveform for the UI: peak per bin + clean flag (selected vs rejected).
+    struct WaveData { std::vector<float> peak; std::vector<char> clean; };
+    void setWave (WaveData w) { std::lock_guard<std::mutex> l (waveMutex_); wave_ = std::move (w); }
+    WaveData getWave() { std::lock_guard<std::mutex> l (waveMutex_); return wave_; }
+
     static SessionState& get() { static SessionState s; return s; }
 
 private:
     std::mutex exportMutex_;
     std::shared_ptr<const FillBuffer> exportFill_;
     double exportSampleRate_ { 48000.0 };
+
+    std::mutex waveMutex_;
+    WaveData wave_;
 };
 } // namespace tonefill::plugin

@@ -10,8 +10,10 @@
 #include "engine/model/RenderSettings.h"
 #include "plugin/SessionState.h"
 
+#include <algorithm>
 #include <cmath>
 #include <functional>
+#include <vector>
 
 namespace tonefill::plugin::ara
 {
@@ -120,6 +122,29 @@ public:
             ss.phase.store (2);
             araLog ("analyze: thr=" + juce::String (threshold) + " partials=" + juce::String (nP)
                     + " learnSec=" + juce::String (m->learnMaterialSeconds) + " levelDb=" + juce::String (lvl));
+
+            // Waveform for the UI: peak per bin + an (approximate, level-based) clean flag.
+            const int bins = 220;
+            tonefill::plugin::SessionState::WaveData wd;
+            wd.peak.assign ((std::size_t) bins, 0.0f);
+            wd.clean.assign ((std::size_t) bins, 0);
+            const int per = juce::jmax (1, n / bins);
+            const float* s0 = src.getReadPointer (0);
+            for (int b = 0; b < bins; ++b)
+            {
+                float pk = 0.0f;
+                const int from = b * per, to = juce::jmin (from + per, n);
+                for (int i = from; i < to; ++i) pk = juce::jmax (pk, std::fabs (s0[i]));
+                wd.peak[(std::size_t) b] = pk;
+            }
+            std::vector<float> srt (wd.peak);
+            std::sort (srt.begin(), srt.end());
+            const float floorPk = srt[(std::size_t) (bins / 10)];
+            const float thr = floorPk * std::pow (10.0f, juce::jlimit (0.0f, 1.0f, threshold) * 30.0f / 20.0f);
+            for (int b = 0; b < bins; ++b)
+                wd.clean[(std::size_t) b] = wd.peak[(std::size_t) b] < thr ? 1 : 0;
+            ss.setWave (std::move (wd));
+
             return m;
         };
 

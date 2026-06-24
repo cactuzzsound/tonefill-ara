@@ -3,15 +3,16 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 
+#include "plugin/ui/ToneFillLookAndFeel.h"
+#include "plugin/SessionState.h"
+
+#include <array>
 #include <memory>
 
 namespace tonefill::plugin { class PluginProcessor; }
 
 namespace tonefill::plugin::ui
 {
-// Editor: knobs grouped by use (Ambience / Synthesis / Output), mode selector, Regenerate +
-// Export WAV, an output meter, and a live status read-out. A timer mirrors parameters into the
-// shared SessionState (so the ARA worker re-renders) and refreshes meter/status.
 class MainView : public juce::Component, private juce::Timer
 {
 public:
@@ -24,23 +25,28 @@ public:
 private:
     void timerCallback() override;
     void exportWav();
+    void setMode (int modeIndex);
+    void updateEmphasis (int modeIndex);
 
     PluginProcessor& processor_;
+    ToneFillLookAndFeel lnf_;
 
-    juce::Label    titleLbl_, statusLbl_, modeLbl_, ambSecLbl_, synthSecLbl_, outSecLbl_;
-    juce::ComboBox modeBox_;
-    juce::TextButton regenButton_ { "Regenerate" }, exportButton_ { "Export WAV" };
+    juce::Label titleLbl_, subLbl_;
+    std::array<juce::TextButton, 4> tabs_;             // display order: Ambience, Static, Hybrid, Complex
+    static constexpr int tabMode_[4] = { 3, 0, 1, 2 }; // -> engine mode index
 
     struct Knob { juce::Slider slider; juce::Label label; };
-    Knob threshold_, fragment_, blend_, tonal_, texture_, movement_, outGain_;
+    Knob threshold_, fragment_, blend_, tonal_, movement_, gain_;
+
+    juce::TextButton regenBtn_ { "Regenerate" }, exportBtn_ { "Export WAV" };
 
     using SA = juce::AudioProcessorValueTreeState::SliderAttachment;
-    using CA = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
-    std::unique_ptr<CA> modeAtt_;
-    std::unique_ptr<SA> thresholdAtt_, fragmentAtt_, blendAtt_, tonalAtt_, textureAtt_, movementAtt_, outGainAtt_;
+    std::unique_ptr<SA> thA_, frA_, blA_, toA_, moA_, gaA_;
 
     std::unique_ptr<juce::FileChooser> chooser_;
+    SessionState::WaveData wave_;
     float meterDb_ = -120.0f;
+    juce::Rectangle<int> waveArea_, meterArea_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainView)
 };
