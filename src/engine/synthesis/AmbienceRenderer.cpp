@@ -147,16 +147,64 @@ void AmbienceRenderer::renderCore (const model::AmbienceModel& model,
     }
 }
 
+void AmbienceRenderer::addTonalLayer (const model::AmbienceModel& model,
+                                     const model::RenderSettings& settings, Output& out) const
+{
+    const double sr = settings.targetSampleRate;
+    const float kTwoPi = 6.283185307179586f;
+    for (std::size_t ch = 0; ch < out.channels.size(); ++ch)
+    {
+        const model::TonalLayer* tonal =
+            ch < model.tonalPerChannel.size() ? &model.tonalPerChannel[ch] : nullptr;
+        if (tonal == nullptr) continue;
+        const model::BoundaryConditionProfile* bpre =
+            ch < model.boundariesPerChannel.size() ? &model.boundariesPerChannel[ch].pre : nullptr;
+
+        auto& dst = out.channels[ch];
+        const int n = (int) dst.size();
+        for (std::size_t k = 0; k < tonal->partials.size(); ++k)
+        {
+            const auto& p = tonal->partials[k];
+            const float w = kTwoPi * p.frequencyHz / (float) sr;
+            float phi0 = p.refPhase;
+            if (bpre != nullptr && k < bpre->partialPhaseAtSeam.size())
+                phi0 = bpre->partialPhaseAtSeam[k] + w;
+            const float amp = settings.tonalRetention * p.amplitude;
+            for (int i = 0; i < n; ++i)
+                dst[(std::size_t) i] += amp * std::sin (w * (float) i + phi0);
+        }
+    }
+}
+
+void AmbienceRenderer::normalizeToTarget (const model::AmbienceModel& model,
+                                          const model::RenderSettings&, Output& out) const
+{
+    for (std::size_t ch = 0; ch < out.channels.size(); ++ch)
+    {
+        const float targetRms = ch < model.noisePerChannel.size() ? model.noisePerChannel[ch].targetRms : 0.0f;
+        if (targetRms <= 0.0f) continue;
+        auto& dst = out.channels[ch];
+        const int n = (int) dst.size();
+        double sumSq = 0.0;
+        for (float s : dst) sumSq += (double) s * s;
+        const float cur = n > 0 ? (float) std::sqrt (sumSq / n) : 0.0f;
+        if (cur > 1.0e-9f) { const float g = targetRms / cur; for (float& s : dst) s *= g; }
+    }
+}
+
 void AmbienceRenderer::renderStatic (const model::AmbienceModel& model,
                                      const model::RenderSettings& settings, Output& out) const
 {
+    // Pure synthetic steady bed + a subtle slow movement so it isn't dead-flat.
     renderCore (model, settings, out, /*useGranular*/ false);
-}
-
-void AmbienceRenderer::renderHybrid (const model::AmbienceModel& model,
-                                     const model::RenderSettings& settings, Output& out) const
-{
-    renderCore (model, settings, out, /*useGranular*/ true);
+    const float depth = juce::jmax (0.04f, settings.movement * 0.15f);
+    dsp::SeededRng master (settings.seed ^ 0x5AAA5AAA5AAA5AAAULL);
+    for (std::size_t ch = 0; ch < out.channels.size(); ++ch)
+    {
+        auto rng = master.deriveSubStream (ch);
+        dsp::applyMacroEnvelope (out.channels[ch].data(), (int) out.channels[ch].size(),
+                                 depth, settings.targetSampleRate, rng);
+    }
 }
 
 void AmbienceRenderer::renderAmbience (const model::AmbienceModel& model,
@@ -182,23 +230,45 @@ void AmbienceRenderer::renderAmbience (const model::AmbienceModel& model,
     }
 }
 
+void AmbienceRenderer::renderHybrid (const model::AmbienceModel& model,
+                                     const model::RenderSettings& settings, Output& out) const
+{
+    // Real texture from RESIDUAL fragments (hum removed) + a clean, phase-coherent tonal layer
+    // re-added on top. Real movement, but the hum stays continuous (no phase jumps at joins).
+    const bool haveRes = ! model.grainsPerChannel.empty()
+                         && ! model.grainsPerChannel[0].sourceResidual.empty();
+    if (! haveRes) { renderCore (model, settings, out, /*useGranular*/ true); return; }
+
+    const double sr = settings.targetSampleRate;
+    const int fragLen  = juce::jmax (256, (int) (settings.fragmentMs * 0.001 * sr));
+    const int xfadeLen = juce::jmax (64, (int) (settings.blendFrac * fragLen));
+    dsp::SeededRng master (settings.seed);
+
+    for (std::size_t ch = 0; ch < out.channels.size(); ++ch)
+    {
+        const auto& res = model.grainsPerChannel[juce::jmin (ch, model.grainsPerChannel.size() - 1)].sourceResidual;
+        auto rng = master.deriveSubStream (ch);
+        dsp::concatenateAmbience (out.channels[ch].data(), (int) out.channels[ch].size(),
+                                  res.data(), (int) res.size(), fragLen, xfadeLen, rng);
+    }
+
+    addTonalLayer (model, settings, out);
+    normalizeToTarget (model, settings, out);
+}
+
 void AmbienceRenderer::renderComplex (const model::AmbienceModel& model,
                                       const model::RenderSettings& settings, Output& out) const
 {
-    renderCore (model, settings, out, /*useGranular*/ true);
+    renderHybrid (model, settings, out);
 
-    // Macro envelope: slow "breathing" level variation, endpoints anchored to keep seam levels.
-    // depth scales with the Movement parameter (movement=1 -> ~+/-15%).
-    if (settings.movement > 0.0f)
+    // Slow "breathing" level variation, endpoints anchored. depth scales with Movement.
+    const float depth = juce::jmax (0.05f, settings.movement * 0.15f);
+    dsp::SeededRng macroMaster (settings.seed ^ 0xA1B2C3D4E5F60718ULL);
+    for (std::size_t ch = 0; ch < out.channels.size(); ++ch)
     {
-        dsp::SeededRng macroMaster (settings.seed ^ 0xA1B2C3D4E5F60718ULL);
-        const float depth = settings.movement * 0.15f;
-        for (std::size_t ch = 0; ch < out.channels.size(); ++ch)
-        {
-            auto rng = macroMaster.deriveSubStream (ch);
-            dsp::applyMacroEnvelope (out.channels[ch].data(), (int) out.channels[ch].size(),
-                                     depth, settings.targetSampleRate, rng);
-        }
+        auto rng = macroMaster.deriveSubStream (ch);
+        dsp::applyMacroEnvelope (out.channels[ch].data(), (int) out.channels[ch].size(),
+                                 depth, settings.targetSampleRate, rng);
     }
 }
 } // namespace tonefill::engine::synthesis

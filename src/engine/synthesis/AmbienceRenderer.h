@@ -40,5 +40,9 @@ private:
     // phase-docked tonal layer, total-level normalization.
     void renderCore (const model::AmbienceModel&, const model::RenderSettings&, Output&,
                      bool useGranular) const;
+
+    // Reusable layers for the real-fragment-based synth modes.
+    void addTonalLayer     (const model::AmbienceModel&, const model::RenderSettings&, Output&) const;
+    void normalizeToTarget (const model::AmbienceModel&, const model::RenderSettings&, Output&) const;
 };
 } // namespace tonefill::engine::synthesis

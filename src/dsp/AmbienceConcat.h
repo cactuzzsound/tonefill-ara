@@ -15,5 +15,5 @@ namespace tonefill::dsp
 void concatenateAmbience (float* out, int n,
                           const float* src, int srcLen,
                           int fragLen, int xfadeLen,
-                          SeededRng& rng, int antiRepeat = 4);
+                          SeededRng& rng, int antiRepeat = 8);
 } // namespace tonefill::dsp

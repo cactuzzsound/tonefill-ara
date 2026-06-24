@@ -23,23 +23,44 @@ juce::AudioBuffer<float> selectCleanAmbience (const juce::AudioBuffer<float>& sr
     const int len = src.getNumSamples();
     if (numCh <= 0 || len < 4 * N) { juce::AudioBuffer<float> c; c.makeCopyOf (src); return c; }
 
-    const int numFrames = (len - N) / H + 1;
-    std::vector<float> frameRms ((std::size_t) numFrames, 0.0f);
-    for (int f = 0; f < numFrames; ++f)
+    // Speech-band copy (high-pass ~300 Hz): voices/claps/clicks live here; steady hum does not.
+    // A frame is clean only if BOTH the broadband level AND the speech-band level are near their
+    // floors -> excludes quiet background voices that broadband level alone would keep.
+    juce::AudioBuffer<float> hp;
+    hp.makeCopyOf (src);
+    for (int ch = 0; ch < numCh; ++ch)
     {
-        float mx = 0.0f;
-        for (int ch = 0; ch < numCh; ++ch)
-            mx = juce::jmax (mx, src.getRMSLevel (ch, f * H, N));
-        frameRms[(std::size_t) f] = mx;
+        juce::IIRFilter f;
+        f.setCoefficients (juce::IIRCoefficients::makeHighPass (sr, 300.0));
+        f.processSamples (hp.getWritePointer (ch), len);
     }
 
-    // Noise floor = 10th percentile of frame RMS. Accept frames within `thresholdNorm`*30 dB of
-    // it -> lower threshold excludes louder material (dialogue/claps/clicks) more aggressively.
-    std::vector<float> sorted = frameRms;
-    std::sort (sorted.begin(), sorted.end());
-    const float floorRms = sorted[(std::size_t) (numFrames / 10)];
-    const float dbAboveFloor = juce::jlimit (0.0f, 1.0f, thresholdNorm) * 30.0f;
-    const float thresh = juce::jmax (floorRms * std::pow (10.0f, dbAboveFloor / 20.0f), 1.0e-5f);
+    const int numFrames = (len - N) / H + 1;
+    std::vector<float> frameRms ((std::size_t) numFrames, 0.0f), midRms ((std::size_t) numFrames, 0.0f);
+    for (int f = 0; f < numFrames; ++f)
+    {
+        float b = 0.0f, m = 0.0f;
+        for (int ch = 0; ch < numCh; ++ch)
+        {
+            b = juce::jmax (b, src.getRMSLevel (ch, f * H, N));
+            m = juce::jmax (m, hp.getRMSLevel (ch, f * H, N));
+        }
+        frameRms[(std::size_t) f] = b;
+        midRms[(std::size_t) f]   = m;
+    }
+
+    auto floorOf = [numFrames] (std::vector<float> v)
+    {
+        std::sort (v.begin(), v.end());
+        return v[(std::size_t) (numFrames / 10)]; // 10th percentile
+    };
+    const float g = std::pow (10.0f, juce::jlimit (0.0f, 1.0f, thresholdNorm) * 30.0f / 20.0f);
+    const float bThresh = juce::jmax (floorOf (frameRms) * g, 1.0e-5f);
+    const float mThresh = juce::jmax (floorOf (midRms) * g, 1.0e-6f);
+
+    std::vector<char> frameClean ((std::size_t) numFrames, 0);
+    for (int f = 0; f < numFrames; ++f)
+        frameClean[(std::size_t) f] = (frameRms[(std::size_t) f] < bThresh && midRms[(std::size_t) f] < mThresh) ? 1 : 0;
 
     // Contiguous quiet runs of >= ~85 ms.
     const int minRun = 4;
@@ -47,7 +68,7 @@ juce::AudioBuffer<float> selectCleanAmbience (const juce::AudioBuffer<float>& sr
     int runStart = -1;
     for (int f = 0; f <= numFrames; ++f)
     {
-        const bool quiet = (f < numFrames) && (frameRms[(std::size_t) f] < thresh);
+        const bool quiet = (f < numFrames) && (frameClean[(std::size_t) f] != 0);
         if (quiet && runStart < 0) runStart = f;
         else if (! quiet && runStart >= 0)
         {

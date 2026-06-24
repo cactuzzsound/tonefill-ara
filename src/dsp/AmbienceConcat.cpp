@@ -45,11 +45,15 @@ void concatenateAmbience (float* out, int n,
         recent.push_back (start);
         if ((int) recent.size() > antiRepeat) recent.pop_front();
 
+        // Occasionally play the fragment reversed: room tone is ~time-symmetric, so this adds
+        // variety (breaks audible repetition) without needing more source material.
+        const bool reverse = rng.nextFloat() < 0.5f;
+
         for (int i = 0; i < fragLen; ++i)
         {
             const int o = pos + i;
             if (o >= n) break;
-            const float s = src[start + i];
+            const float s = src[start + (reverse ? (fragLen - 1 - i) : i)];
             if (i < xfadeLen && ! first)
             {
                 // Equal-power blend with the previous fragment's tail already in `out`.

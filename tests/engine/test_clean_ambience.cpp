@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "core/DiagnosticsLogger.h"
+#include "dsp/SeededRng.h"
 #include "engine/analysis/AnalysisSession.h"
 #include "engine/model/AmbienceModel.h"
 
@@ -20,15 +21,13 @@ TEST_CASE ("Clean-ambience selection learns from the quiet gaps, not the loud pa
     juce::AudioBuffer<float> buf (1, seg * numSeg);
     auto* d = buf.getWritePointer (0);
 
+    tonefill::dsp::SeededRng rng (5);
     for (int s = 0; s < numSeg; ++s)
     {
-        const bool loud = (s % 2) == 0;
+        const bool loud = (s % 2) == 0;            // loud broadband bursts vs quiet broadband floor
+        const float amp = loud ? 0.4f : 0.02f;
         for (int i = 0; i < seg; ++i)
-        {
-            const int n = s * seg + i;
-            if (loud) d[n] = 0.4f * std::sin (2.0f * 3.14159265f * 220.0f * n / (float) sr);
-            else      d[n] = 0.02f * std::sin (2.0f * 3.14159265f * 1234.0f * n / (float) sr);
-        }
+            d[s * seg + i] = amp * (rng.nextFloat() * 2.0f - 1.0f);
     }
 
     const float overallRms = buf.getRMSLevel (0, 0, buf.getNumSamples()); // ~0.2 (loud-dominated)

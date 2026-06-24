@@ -1,14 +1,14 @@
 # ToneFill golden signatures: <key> <numCh> <numSamples> <checksum>
 # Auto-managed by test_golden_regression. Review diffs before committing.
-hum_50/complex 2 24000 0xcdbe47e315245258
-hum_50/hybrid 2 24000 0xdbeebda072ad05b0
-hum_50/static 2 24000 0xd081d0a6d63474c
+hum_50/complex 2 24000 0x43548868b2a28466
+hum_50/hybrid 2 24000 0x77e251ac88b33b85
+hum_50/static 2 24000 0x9e4d36a41bbaf0d0
 impulse_train/complex 2 24000 0x171b9cded5ca45ff
 impulse_train/hybrid 2 24000 0x171b9cded5ca45ff
 impulse_train/static 2 24000 0x171b9cded5ca45ff
-sine_1k/complex 2 24000 0x5724139c447e44fb
-sine_1k/hybrid 2 24000 0xbea6e369c909db58
-sine_1k/static 2 24000 0x8328da041cac6d6
-white_noise/complex 2 24000 0xe73a32f628e41d8d
-white_noise/hybrid 2 24000 0xdb681d1f1dab20b6
-white_noise/static 2 24000 0x1bd6d95d9b7950c0
+sine_1k/complex 2 24000 0x5c6966cf27971df1
+sine_1k/hybrid 2 24000 0x1cc0b6b940cd667f
+sine_1k/static 2 24000 0xd5ab4052b07ab8d4
+white_noise/complex 2 24000 0x49ccbb8a1a248995
+white_noise/hybrid 2 24000 0xaa85b138b5a36935
+white_noise/static 2 24000 0x1e4fae5624ffd16e
