@@ -5,9 +5,11 @@
 #include "engine/model/NoiseProfile.h"
 #include "engine/model/GrainCorpus.h"
 #include "engine/model/BoundaryConditionProfile.h"
+#include "dsp/NoiseModel.h"
 
 #include <cstdint>
 #include <memory>
+#include <utility>
 #include <vector>
 
 namespace tonefill::engine::model
@@ -44,6 +46,13 @@ struct AmbienceModel
 
     // Selected clean real ambience per channel (for the Ambience concatenative mode).
     std::vector<std::vector<float>> cleanAudioPerChannel;
+
+    // Robust stationary-noise spectrum of the room tone -> drives constant spectral re-synthesis
+    // (the Ambience mode's bed). Empty/invalid falls back to concatenation.
+    dsp::NoiseSpectrum noiseSpectrum;
+
+    // Selected clean sample ranges in the SOURCE coordinates (for the UI waveform overlay).
+    std::vector<std::pair<int, int>> cleanRanges;
 
     // Diagnostics surfaced to the UI (drive warning states; see DiagnosticsLogger).
     float learnMaterialSeconds   = 0.0f;

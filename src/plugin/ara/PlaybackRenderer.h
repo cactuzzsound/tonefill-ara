@@ -8,6 +8,8 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
+#include "plugin/SessionState.h"
+
 #include <atomic>
 #include <map>
 #include <memory>
@@ -49,6 +51,10 @@ public:
 
     using juce::ARAPlaybackRenderer::processBlock;
 
+    // Wired by the owning PluginProcessor in didBindToARA(): the per-instance UI bridge this
+    // renderer's worker publishes to. Must be set before prepareToPlay starts the worker.
+    void setSessionState (std::shared_ptr<plugin::SessionState> s) { state_ = std::move (s); }
+
 private:
     struct FillData
     {
@@ -59,6 +65,7 @@ private:
     class FillWorker; // background analyze+render thread (defined in .cpp)
 
     ProcessingLockInterface& lockInterface;
+    std::shared_ptr<plugin::SessionState> state_; // per-instance UI bridge (set before play)
 
     double sampleRate = 48000.0;
     int    numChannels = 0;

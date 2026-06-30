@@ -1,8 +1,10 @@
 #pragma once
 
 #include "plugin/ParameterState.h"
+#include "plugin/SessionState.h"
 #include "plugin/ara/ARAIntegrationFacade.h"
 #include "engine/render/RenderManager.h"
+#include "engine/model/AmbienceModel.h"
 #include "core/DiagnosticsLogger.h"
 
 #include <juce_audio_processors/juce_audio_processors.h>
@@ -75,6 +77,17 @@ public:
     engine::render::RenderManager& renderManager() noexcept { return renderManager_; }
     ara::ARAIntegrationFacade& araFacade()   noexcept { return araFacade_; }
 
+    // Per-instance UI <-> worker bridge. NOT global: each plugin instance has its own, so
+    // multiple instances (Reaper makes one per item) don't clobber each other's state.
+    SessionState&                     sessionState()       noexcept { return *sessionState_; }
+    std::shared_ptr<SessionState>     sessionStatePtr()    noexcept { return sessionState_; }
+
+#if TONEFILL_ARA_AVAILABLE
+    // Called by JUCE once this instance is bound to ARA: hand our SessionState to this
+    // instance's playback renderer so its worker publishes to OUR editor (not a shared global).
+    void didBindToARA() noexcept override;
+#endif
+
     // TODO(ARA): expose the ARA document controller factory via JUCE ARA support. With
     // IS_ARA_EFFECT, JUCE generates the binding; we provide the specialization in ara/.
 
@@ -85,6 +98,29 @@ private:
     ParameterState                 params_;          // APVTS source of truth (message thread)
     ara::ARAIntegrationFacade      araFacade_;        // host boundary
     engine::render::RenderManager  renderManager_;    // owns render worker + cache
+
+    // shared_ptr (not a plain member) so the ARA renderer/worker can co-own it and we never
+    // get a use-after-free from base/member destruction-order surprises.
+    std::shared_ptr<SessionState>  sessionState_ { std::make_shared<SessionState>() };
+
+    // Non-ARA LEARN / GENERATE path (Pro Tools AudioSuite, or any plain insert). Learn mode:
+    // capture + analyze the selection into learnedModel_ (output = passthrough). Generate mode:
+    // synthesize room tone from learnedModel_ over the selection (no need to re-read it), so the
+    // render starts at sample 0 (no head silence) and responds to the knobs.
+    void analyzeLearn();                            // learnInput_ -> learnedModel_
+    void buildGenFill();                            // learnedModel_ + params -> genFill_
+    std::uint64_t genParamHash() const;             // render-param fingerprint (rebuild trigger)
+
+    juce::AudioBuffer<float>        learnInput_;     // accumulated material to learn from (capped)
+    int                            learnInputLen_  = 0;
+    bool                           learnDone_      = false;
+    engine::model::AmbienceModelPtr learnedModel_;
+    std::vector<std::vector<float>> genFill_;        // loopable room-tone fill from the model
+    long long                      genFillLen_     = 0;
+    long long                      genPos_         = 0;
+    std::uint64_t                  genHash_        = 0;
+    double                         currentSampleRate_ = 48000.0;
+    int                            hostBlockSize_  = 0; // to detect the final partial block
 
     // Owns the current preview fill (message thread). The buffer is published to the audio
     // thread via a raw atomic pointer so the audio thread never touches a shared_ptr control

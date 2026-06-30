@@ -34,13 +34,28 @@ if(TONEFILL_ARA_AVAILABLE)
     set(_tonefill_ara_kw IS_ARA_EFFECT TRUE)
 endif()
 
+# AAX (Pro Tools) - opt-in: needs Avid's AAX SDK (download from your Avid developer account).
+# Point at it with -DAAX_SDK_PATH=/abs/path, or drop it at external/aax-sdk. Built unsigned for
+# AudioSuite testing in a Developer build of Pro Tools; commercial release needs PACE signing.
+set(_tonefill_aax_kw "")
+if(NOT AAX_SDK_PATH AND EXISTS "${CMAKE_SOURCE_DIR}/external/aax-sdk/Interfaces")
+    set(AAX_SDK_PATH "${CMAKE_SOURCE_DIR}/external/aax-sdk")
+endif()
+if(AAX_SDK_PATH AND EXISTS "${AAX_SDK_PATH}/Interfaces")
+    juce_set_aax_sdk_path("${AAX_SDK_PATH}")
+    set(_tonefill_aax_kw AAX)
+    message(STATUS "ToneFillPlugin: AAX enabled (SDK at ${AAX_SDK_PATH}).")
+else()
+    message(STATUS "ToneFillPlugin: AAX disabled (set -DAAX_SDK_PATH=/path/to/aax-sdk to enable).")
+endif()
+
 juce_add_plugin(ToneFillPlugin
     PRODUCT_NAME             "ToneFill"
-    COMPANY_NAME             "YourCo"
-    BUNDLE_ID                com.yourco.tonefill
-    PLUGIN_MANUFACTURER_CODE Yco0
+    COMPANY_NAME             "Cactuzz Sound"
+    BUNDLE_ID                com.cactuzzsound.tonefill
+    PLUGIN_MANUFACTURER_CODE Catz
     PLUGIN_CODE              Tfil
-    FORMATS                  VST3 AU
+    FORMATS                  VST3 AU ${_tonefill_aax_kw}
     ${_tonefill_ara_kw}                       # IS_ARA_EFFECT TRUE, or nothing
     IS_SYNTH                 FALSE
     NEEDS_MIDI_INPUT         FALSE
@@ -57,6 +72,10 @@ if(TONEFILL_ARA_AVAILABLE)
     target_sources(ToneFillPlugin PRIVATE ${PLUGIN_ARA_SOURCES})
 endif()
 
+# Knob film-strip skin (Modern_4): embedded so the build needs no runtime asset path.
+juce_add_binary_data(ToneFillAssets SOURCES ${CMAKE_SOURCE_DIR}/assets/knob_modern.png)
+set_target_properties(ToneFillAssets PROPERTIES POSITION_INDEPENDENT_CODE TRUE)
+
 target_compile_definitions(ToneFillPlugin PUBLIC
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
@@ -69,6 +88,7 @@ tonefill_configure_ara(ToneFillPlugin)
 
 target_link_libraries(ToneFillPlugin
     PRIVATE
+        ToneFillAssets
         tonefill_engine
         juce::juce_audio_utils
         juce::juce_audio_plugin_client

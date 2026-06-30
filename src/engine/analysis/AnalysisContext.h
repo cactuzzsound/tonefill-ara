@@ -24,13 +24,17 @@ struct AnalysisContext
     float  learnWindowSeconds = 4.0f;
     float  grainSizeMs        = 120.0f;
     float  tonalSensitivity   = 0.5f;   // 0..1
-    float  speechReject       = 0.6f;   // 0..1
+    float  speechReject       = 0.5f;   // 0..1 -> libfvad aggressiveness (more = exclude speech harder)
     float  cleanThreshold     = 0.3f;   // 0..1 -> 0..30 dB above the noise floor to accept as
                                         //         clean ambience. Lower = stricter (excludes
                                         //         dialogue/claps/clicks more aggressively).
     float  leftRightBias      = 0.0f;   // -1..+1
     bool   leftEnabled        = true;
     bool   rightEnabled       = true;
+
+    // Manual mode: leftContext already holds ONLY the user-selected material -> skip the
+    // automatic clean-ambience detection and learn from it as-is.
+    bool   useManualSelection = false;
 
     // Identifies the source range so the current-model cache can key on it. Computed by the facade.
     std::uint64_t sourceContentHash = 0;

@@ -18,39 +18,25 @@ public:
 
     juce::AudioProcessorValueTreeState apvts;
 
-    // Snapshot the render-affecting parameters into a RenderSettings for a render job.
-    // `seed` is NOT an APVTS parameter (not automatable, must round-trip exactly); the
-    // processor owns it as plain serialized state and passes it in here.
-    engine::model::RenderSettings toRenderSettings (long long targetDurationSamples,
-                                                    double targetSampleRate,
-                                                    int targetChannels,
-                                                    std::uint64_t seed) const;
-
-    // True if `paramID` requires re-analysis (vs. only re-render). Drives the "Analyze"
-    // prompt in the UI.
-    static bool requiresReanalysis (const juce::String& paramID);
-
-    // Stable parameter IDs.
+    // Stable parameter IDs (only the controls that actually drive the current engine).
     struct IDs
     {
-        static constexpr auto mode            = "mode";
-        static constexpr auto tonalRetention  = "tonalRetention";
-        static constexpr auto textureAmount   = "textureAmount";
-        static constexpr auto movement        = "movement";
-        static constexpr auto fragment        = "fragment";   // Ambience: real-fragment length
-        static constexpr auto blend           = "blend";      // Ambience: crossfade amount
-        static constexpr auto threshold       = "threshold";  // clean-ambience selectivity (re-analysis)
-        static constexpr auto randomness      = "randomness";
-        static constexpr auto stereoWidth     = "stereoWidth";
-        static constexpr auto crossfadeMs      = "crossfadeMs";
-        static constexpr auto outputGain       = "outputGain"; // dB
-        // Note: seed is intentionally NOT an APVTS parameter (see toRenderSettings).
-        // Analysis-affecting:
-        static constexpr auto learnWindowSec  = "learnWindowSec";
-        static constexpr auto grainSizeMs     = "grainSizeMs";
-        static constexpr auto tonalSensitivity = "tonalSensitivity";
-        static constexpr auto speechReject    = "speechReject";
-        static constexpr auto leftRightBias   = "leftRightBias";
+        static constexpr auto mode           = "mode";
+        static constexpr auto threshold      = "threshold";      // clean-ambience level selectivity
+        static constexpr auto speechReject   = "speechReject";   // libfvad speech exclusion
+        static constexpr auto fragment       = "fragment";       // Ambience: real-fragment length
+        static constexpr auto blend          = "blend";          // Ambience: crossfade amount
+        static constexpr auto randomness     = "randomness";     // variation: loop length + jitter
+        static constexpr auto tonalRetention = "tonalRetention"; // synth: hum level
+        static constexpr auto movement       = "movement";       // synth: slow breathing
+        static constexpr auto outputGain     = "outputGain";     // dB
+        static constexpr auto normEnabled    = "normEnabled";    // normalize to a loudness target
+        static constexpr auto normTarget     = "normTarget";     // target value (dBFS or LUFS)
+        static constexpr auto normUnit       = "normUnit";       // 0 = dBFS (peak), 1 = LUFS
+        static constexpr auto wholeFile      = "wholeFile";      // analyze whole item vs first 4 min
+        static constexpr auto learnMode      = "learnMode";      // AudioSuite: learn from selection vs generate
+        static constexpr auto renderLength   = "renderLength";   // Export WAV length, seconds
+        // seed is plain processor state (not automatable), not an APVTS parameter.
     };
 
 private:

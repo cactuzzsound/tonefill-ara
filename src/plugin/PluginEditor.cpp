@@ -7,7 +7,7 @@ PluginEditor::PluginEditor (PluginProcessor& p)
 {
     addAndMakeVisible (mainView_);
     setResizable (true, true);
-    setSize (560, 560);
+    setSize (600, 700);
 }
 
 PluginEditor::~PluginEditor() = default;

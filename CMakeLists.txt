@@ -26,6 +26,10 @@ add_library(tonefill_engine STATIC
     src/dsp/GranularSynth.cpp
     src/dsp/MacroEnvelope.cpp
     src/dsp/AmbienceConcat.cpp
+    src/dsp/VoiceDetect.cpp
+    src/dsp/Loudness.cpp
+    src/dsp/NoiseModel.cpp
+    src/dsp/SpectralResynth.cpp
 
     src/engine/analysis/AnalysisSession.cpp
     src/engine/analysis/AmbienceModelBuilder.cpp
@@ -51,6 +55,21 @@ target_link_libraries(tonefill_engine
     PRIVATE
         juce::juce_recommended_config_flags
         juce::juce_recommended_warning_flags)
+
+# ---------------------------------------------------------------------------
+# libfvad (WebRTC VAD, BSD-3) — speech-aware clean-ambience selection. Auto-detected:
+# if external/libfvad is present it's compiled in; otherwise the engine falls back to the
+# level-only selection. Clone: git clone https://github.com/dpirch/libfvad external/libfvad
+# ---------------------------------------------------------------------------
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/external/libfvad/include/fvad.h")
+    add_subdirectory(external/libfvad EXCLUDE_FROM_ALL)
+    target_link_libraries(tonefill_engine PRIVATE fvad)
+    target_include_directories(tonefill_engine PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/external/libfvad/include")
+    target_compile_definitions(tonefill_engine PRIVATE TONEFILL_USE_FVAD=1)
+    message(STATUS "libfvad found -> speech-aware clean selection enabled")
+else()
+    message(STATUS "libfvad not found -> level-only clean selection")
+endif()
 
 # ---------------------------------------------------------------------------
 # Plugin target (ARA-enabled VST3 + AU). Defined in its own list file.

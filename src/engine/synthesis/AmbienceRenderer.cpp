@@ -4,6 +4,7 @@
 #include "dsp/GranularSynth.h"
 #include "dsp/MacroEnvelope.h"
 #include "dsp/AmbienceConcat.h"
+#include "dsp/SpectralResynth.h"
 
 #include <juce_core/juce_core.h> // juce::ignoreUnused
 #include <algorithm>
@@ -210,23 +211,43 @@ void AmbienceRenderer::renderStatic (const model::AmbienceModel& model,
 void AmbienceRenderer::renderAmbience (const model::AmbienceModel& model,
                                       const model::RenderSettings& settings, Output& out) const
 {
-    // Concatenative REAL ambience: blend real clean fragments. No synthesis -> natural sound.
-    // Falls back to the synth Hybrid bed if there is no clean material to draw from.
+    // REAL-AUDIO grain cloud: overlap-add many real grains from the clean material so it sounds
+    // like THIS room (not synthesis), while dense overlap masks grain boundaries and averages out
+    // louder bits -> a steady, smoothly-blended bed. This is the Ambience mode.
     const bool haveClean = ! model.cleanAudioPerChannel.empty()
                            && ! model.cleanAudioPerChannel[0].empty();
     if (! haveClean) { renderCore (model, settings, out, /*useGranular*/ true); return; }
 
     const double sr = settings.targetSampleRate;
-    const int fragLen  = juce::jmax (256, (int) (settings.fragmentMs * 0.001 * sr));
-    const int xfadeLen = juce::jmax (64, (int) (settings.blendFrac * fragLen));
+    const int grainLen = juce::jmax (512, (int) (settings.fragmentMs * 0.001 * sr)); // Chunk Size
+    // Crossfade knob -> overlap density (2..8 grains overlapping). Higher = smoother.
+    const int density = juce::jlimit (2, 8, 2 + (int) std::lround ((settings.blendFrac - 0.05f) / 0.45f * 6.0f));
     dsp::SeededRng master (settings.seed);
 
     for (std::size_t ch = 0; ch < out.channels.size(); ++ch)
     {
         const auto& srcCh = model.cleanAudioPerChannel[juce::jmin (ch, model.cleanAudioPerChannel.size() - 1)];
         auto rng = master.deriveSubStream (ch);
-        dsp::concatenateAmbience (out.channels[ch].data(), (int) out.channels[ch].size(),
-                                  srcCh.data(), (int) srcCh.size(), fragLen, xfadeLen, rng);
+        dsp::grainCloud (out.channels[ch].data(), (int) out.channels[ch].size(),
+                         srcCh.data(), (int) srcCh.size(), grainLen, density, rng, 12, settings.randomness);
+    }
+
+    // Normalise to the room's level with a SHARED gain (keeps the stereo balance).
+    float targetRms = (! model.noisePerChannel.empty() && model.noisePerChannel[0].targetRms > 0.0f)
+                          ? model.noisePerChannel[0].targetRms : 0.0f;
+    if (targetRms <= 0.0f)
+    {
+        const auto& cc = model.cleanAudioPerChannel[0];
+        double e = 0.0; for (float v : cc) e += (double) v * v;
+        targetRms = (float) std::sqrt (e / (double) juce::jmax<std::size_t> (1, cc.size()));
+    }
+    double e = 0.0; long long cnt = 0;
+    for (auto& chn : out.channels) { for (float v : chn) e += (double) v * v; cnt += (long long) chn.size(); }
+    const double rms = std::sqrt (e / (double) juce::jmax<long long> (1, cnt));
+    if (rms > 1.0e-9 && targetRms > 0.0f)
+    {
+        const float gn = (float) ((double) targetRms / rms);
+        for (auto& chn : out.channels) for (float& v : chn) v *= gn;
     }
 }
 
@@ -249,7 +270,7 @@ void AmbienceRenderer::renderHybrid (const model::AmbienceModel& model,
         const auto& res = model.grainsPerChannel[juce::jmin (ch, model.grainsPerChannel.size() - 1)].sourceResidual;
         auto rng = master.deriveSubStream (ch);
         dsp::concatenateAmbience (out.channels[ch].data(), (int) out.channels[ch].size(),
-                                  res.data(), (int) res.size(), fragLen, xfadeLen, rng);
+                                  res.data(), (int) res.size(), fragLen, xfadeLen, rng, 8, settings.randomness);
     }
 
     addTonalLayer (model, settings, out);
@@ -259,9 +280,11 @@ void AmbienceRenderer::renderHybrid (const model::AmbienceModel& model,
 void AmbienceRenderer::renderComplex (const model::AmbienceModel& model,
                                       const model::RenderSettings& settings, Output& out) const
 {
-    renderHybrid (model, settings, out);
+    // Same real-audio grain cloud as Ambience, plus slow "breathing" so long fills feel alive
+    // instead of dead-steady. The only difference between the two exposed modes is this movement.
+    renderAmbience (model, settings, out);
 
-    // Slow "breathing" level variation, endpoints anchored. depth scales with Movement.
+    // Slow level variation, endpoints anchored. depth scales with Movement.
     const float depth = juce::jmax (0.05f, settings.movement * 0.15f);
     dsp::SeededRng macroMaster (settings.seed ^ 0xA1B2C3D4E5F60718ULL);
     for (std::size_t ch = 0; ch < out.channels.size(); ++ch)
