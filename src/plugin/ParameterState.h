@@ -37,6 +37,7 @@ public:
         static constexpr auto normTarget     = "normTarget";     // target value (dBFS or LUFS)
         static constexpr auto normUnit       = "normUnit";       // 0 = dBFS (peak), 1 = LUFS
         static constexpr auto wholeFile      = "wholeFile";      // analyze whole item vs first 4 min
+        static constexpr auto statistical    = "statistical";    // Statistical selection (Design §E) vs Classic
         static constexpr auto learnMode      = "learnMode";      // AudioSuite: learn from selection vs generate
         static constexpr auto renderLength   = "renderLength";   // Export WAV length, seconds
         // seed is plain processor state (not automatable), not an APVTS parameter.

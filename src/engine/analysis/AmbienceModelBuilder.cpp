@@ -1,4 +1,5 @@
 #include "engine/analysis/AmbienceModelBuilder.h"
+#include "engine/analysis/CandidateFrameSelector.h"
 #include "dsp/Stft.h"
 #include "dsp/TonalDetect.h"
 #include "dsp/VoiceDetect.h"
@@ -460,10 +461,26 @@ AmbienceModelBuilder::assemble (const AnalysisContext& ctx, std::atomic<bool>& c
     // (RMS, LTAS, tonal, grains) uses this filtered material.
     std::vector<std::pair<int, int>> cleanRanges;
     float availSec = 0.0f, roughnessDb = 0.0f;
-    juce::AudioBuffer<float> learn =
-        selectCleanAmbience (raw, ctx.analysisSampleRate, ctx.cleanThreshold, ctx.speechReject,
-                             ctx.flatness, ctx.minFillSeconds, /*trust=*/ ctx.useManualSelection,
-                             &cleanRanges, &availSec, &roughnessDb);
+    juce::AudioBuffer<float> learn;
+    if (ctx.statisticalSelection && ! ctx.useManualSelection)
+    {
+        // AnalysisModel::Statistical (Design §E) - weighted per-frame scoring. Same output contract
+        // as selectCleanAmbience, so everything downstream is unchanged. Manual mode still uses the
+        // Classic trusted path (the user-selected region is already the material).
+        CandidateFrameSelector::Params sp;
+        sp.cleanThreshold = ctx.cleanThreshold;
+        sp.speechReject   = ctx.speechReject;
+        sp.flatness       = ctx.flatness;
+        sp.minFillSeconds = ctx.minFillSeconds;
+        learn = CandidateFrameSelector().selectLearnBuffer (raw, ctx.analysisSampleRate, sp,
+                                                            &cleanRanges, &availSec, &roughnessDb);
+    }
+    else
+    {
+        learn = selectCleanAmbience (raw, ctx.analysisSampleRate, ctx.cleanThreshold, ctx.speechReject,
+                                     ctx.flatness, ctx.minFillSeconds, /*trust=*/ ctx.useManualSelection,
+                                     &cleanRanges, &availSec, &roughnessDb);
+    }
     const juce::AudioBuffer<float>& src = learn;
     model->cleanRanges = std::move (cleanRanges);
     model->availableCleanSeconds = availSec;

@@ -113,6 +113,12 @@ MainView::MainView (PluginProcessor& processor) : processor_ (processor)
     addAndMakeVisible (wholeBtn_);
     wfA_ = std::make_unique<BA> (apvts, IDs::wholeFile, wholeBtn_);
 
+    statBtn_.setClickingTogglesState (true);
+    statBtn_.setTooltip ("Statistical selection (experimental): weighted per-frame scoring instead of the "
+                         "Classic gate stack. A/B by ear - Off = Classic (default).");
+    addAndMakeVisible (statBtn_);
+    stA_ = std::make_unique<BA> (apvts, IDs::statistical, statBtn_);
+
     waveBtn_.setTooltip ("Open a large waveform view with a timecode ruler, zoom and scroll for precise selecting.");
     waveBtn_.onClick = [this] { openWaveformWindow(); };
     addAndMakeVisible (waveBtn_);
@@ -334,6 +340,8 @@ void MainView::resized()
         head.removeFromRight (8);
         wholeBtn_.setBounds (head.removeFromRight (48).withSizeKeepingCentre (48, 24));
         head.removeFromRight (8);
+        statBtn_.setBounds (head.removeFromRight (48).withSizeKeepingCentre (48, 24));
+        head.removeFromRight (8);
         waveBtn_.setBounds (head.removeFromRight (84).withSizeKeepingCentre (84, 24));
     }
     titleLbl_.setBounds (head.removeFromTop (22));
@@ -418,6 +426,7 @@ void MainView::timerCallback()
     ss.normalizeTarget.store (apvts.getRawParameterValue (IDs::normTarget)->load());
     ss.normalizeLufs.store (normLufs);
     ss.wholeFile.store (apvts.getRawParameterValue (IDs::wholeFile)->load() > 0.5f);
+    ss.statisticalMode.store (apvts.getRawParameterValue (IDs::statistical)->load() > 0.5f);
 
     // When normalizing, Output is bypassed; show that by disabling the knob and the normalize
     // controls follow the toggle.

@@ -34,6 +34,7 @@ struct SessionState
     std::atomic<float>         renderLength { 5.0f }; // seconds, for Export WAV
     std::atomic<bool>          manualMode { false };  // learn from user-selected regions
     std::atomic<bool>          wholeFile { false };   // analyze the whole item (vs first 4 min)
+    std::atomic<bool>          statisticalMode { false }; // Statistical selection (Design §E) vs Classic
     std::atomic<int>           sourceSamples { 0 };   // length of the analysed source (UI mapping)
     std::atomic<double>        sourceSampleRate { 48000.0 }; // for the UI timecode ruler
     std::atomic<std::uint64_t> seed { 1 };
