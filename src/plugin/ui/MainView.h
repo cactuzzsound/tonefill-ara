@@ -57,6 +57,7 @@ private:
     juce::TextButton autoBtn_ { "Auto" }, manualBtn_ { "Manual" }; // learn-source mode toggle
     juce::TextButton enhanceBtn_ { "Enhance" };                    // PaulStretch resynthesis on/off
     juce::TextButton wholeBtn_ { "Full" };                         // analyze whole item vs first 4 min
+    juce::TextButton statBtn_ { "Stat" };                          // Statistical selection vs Classic
     juce::TextButton waveBtn_ { "Waveform" };                      // opens the large waveform window
 
     // Loudness normalize: bake the fill to a dBFS-peak or LUFS target (disables the Output knob).
@@ -69,7 +70,7 @@ private:
     using BA  = juce::AudioProcessorValueTreeState::ButtonAttachment;
     using CBA = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
     std::unique_ptr<SA> thA_, spA_, frA_, blA_, vaA_, mfA_, flA_, gaA_, leA_, ntA_;
-    std::unique_ptr<BA>  neA_, wfA_, enA_;
+    std::unique_ptr<BA>  neA_, wfA_, enA_, stA_;
     std::unique_ptr<CBA> nuA_;
 
     void openWaveformWindow();

@@ -41,6 +41,10 @@ struct AnalysisContext
     float  flatness        = 0.7f;   // 0..1 strictness (higher = only very flat frames)
     float  minFillSeconds  = 2.0f;   // minimum contiguous stable run
 
+    // AnalysisModel::Statistical (Design §E): use CandidateFrameSelector's weighted per-frame
+    // scoring instead of the Classic hand-tuned gate stack. Default false = Classic (unchanged).
+    bool   statisticalSelection = false;
+
     // Identifies the source range so the current-model cache can key on it. Computed by the facade.
     std::uint64_t sourceContentHash = 0;
 };

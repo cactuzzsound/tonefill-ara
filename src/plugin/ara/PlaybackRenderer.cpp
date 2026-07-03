@@ -130,6 +130,7 @@ public:
             ctx.speechReject = ss.speechReject.load();
             ctx.flatness = ss.flatness.load();
             ctx.minFillSeconds = ss.minFill.load();
+            ctx.statisticalSelection = ss.statisticalMode.load();
             ctx.sourceContentHash = (std::uint64_t) n;
             ss.phase.store (1);
             auto r = session.run (ctx, cancel);
@@ -222,7 +223,7 @@ public:
         engine::model::AmbienceModelPtr model;
         float lastThreshold = -1.0f, lastSpeech = -1.0f, lastFlat = -1.0f, lastMinFill = -1.0f;
         int lastGen = -1, lastManualGen = -1;
-        bool lastManual = false;
+        bool lastManual = false, lastStat = false;
 
         // Last rendered seamless loop BEFORE any output/normalize gain, plus its measured levels.
         // Keeping it lets a Normalize/target change re-scale + re-publish without a full re-render.
@@ -291,16 +292,18 @@ public:
             // Fill, manual on/off, or the manual selection itself.
             const float flat = ss.flatness.load();
             const float minf = ss.minFill.load();
+            const bool stat = ss.statisticalMode.load();
             if (model == nullptr || std::abs (thr - lastThreshold) > 1.0e-4f
                 || std::abs (spk - lastSpeech) > 1.0e-4f || std::abs (flat - lastFlat) > 1.0e-4f
-                || std::abs (minf - lastMinFill) > 1.0e-4f || manual != lastManual || mGen != lastManualGen)
+                || std::abs (minf - lastMinFill) > 1.0e-4f || manual != lastManual || mGen != lastManualGen
+                || stat != lastStat)
             {
                 const auto ranges = manual ? ss.getManualRanges() : std::vector<std::pair<int, int>>{};
                 const bool useManual = manual && ! ranges.empty();
                 const juce::AudioBuffer<float> learnInput = useManual ? buildManual (ranges) : learnSrc;
                 model = analyze (thr, learnInput, useManual);
                 lastThreshold = thr; lastSpeech = spk; lastFlat = flat; lastMinFill = minf;
-                lastManual = manual; lastManualGen = mGen;
+                lastManual = manual; lastManualGen = mGen; lastStat = stat;
                 needRender = true;
             }
             if (gen != lastGen) { lastGen = gen; needRender = true; }
