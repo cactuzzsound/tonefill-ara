@@ -17,7 +17,9 @@ struct SessionState
     std::atomic<int>           mode { 3 };            // 0 static, 1 hybrid, 2 complex, 3 ambience
     std::atomic<float>         tonalRetention { 1.0f };
     std::atomic<float>         textureAmount { 0.5f };
-    std::atomic<float>         movement { 0.2f };
+    std::atomic<float>         minFill { 2.0f };      // min stable-fragment length (seconds)
+    std::atomic<float>         flatness { 0.7f };     // stationarity strictness (0..1)
+    std::atomic<bool>          paulStretch { false }; // Enhance: PaulStretch resynthesis on/off
     std::atomic<float>         fragment { 0.4f };
     std::atomic<float>         blend { 0.3f };
     std::atomic<float>         randomness { 0.4f };   // variation: loop length + per-fragment jitter
@@ -33,6 +35,7 @@ struct SessionState
     std::atomic<bool>          manualMode { false };  // learn from user-selected regions
     std::atomic<bool>          wholeFile { false };   // analyze the whole item (vs first 4 min)
     std::atomic<int>           sourceSamples { 0 };   // length of the analysed source (UI mapping)
+    std::atomic<double>        sourceSampleRate { 48000.0 }; // for the UI timecode ruler
     std::atomic<std::uint64_t> seed { 1 };
     std::atomic<int>           generation { 0 };
 
@@ -40,6 +43,9 @@ struct SessionState
     std::atomic<int>   phase { 0 };          // 0 idle, 1 analyzing, 2 ready
     std::atomic<int>   numPartials { 0 };
     std::atomic<float> learnSeconds { 0.0f };
+    std::atomic<int>   cleanChunks { 0 };    // number of stable fragments actually used
+    std::atomic<float> availSeconds { 0.0f }; // total clean found before the Min Fill filter
+    std::atomic<float> seamRiskDb { 0.0f };   // An5: mean band-dB mismatch across concat joins
     std::atomic<float> levelDb { -120.0f };  // analyzed source level (in)
     std::atomic<float> outMeterDb { -120.0f }; // live output level (out)
 

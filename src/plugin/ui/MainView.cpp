@@ -1,6 +1,8 @@
 #include "plugin/ui/MainView.h"
+#include "plugin/ui/WaveformWindow.h"
 #include "plugin/PluginProcessor.h"
 #include "plugin/ParameterState.h"
+#include "dsp/Loudness.h"
 
 #include <juce_audio_formats/juce_audio_formats.h>
 
@@ -12,10 +14,17 @@
 namespace tonefill::plugin::ui
 {
 using IDs = ParameterState::IDs;
-constexpr int MainView::tabMode_[2];
 
 namespace
 {
+juce::String formatClock (double seconds)
+{
+    if (seconds < 0) seconds = 0;
+    const int m = (int) (seconds / 60.0);
+    const double s = seconds - m * 60.0;
+    return juce::String::formatted ("%d:%04.1f", m, s);
+}
+
 void initKnob (juce::Component& parent, juce::Slider& s, juce::Label& l,
                const juce::String& name, const juce::String& tip)
 {
@@ -47,23 +56,6 @@ MainView::MainView (PluginProcessor& processor) : processor_ (processor)
     subLbl_.setColour (juce::Label::textColourId, ToneFillLookAndFeel::muted());
     addAndMakeVisible (subLbl_);
 
-    const char* names[2] = { "Ambience", "Complex" };
-    const char* tips[2]  = { "Steady real room tone: a constant bed rebuilt from the recording itself. Best default.",
-                             "Same real room tone, plus slow level movement so long fills feel alive, not dead-steady." };
-    for (int i = 0; i < 2; ++i)
-    {
-        tabs_[(std::size_t) i].setButtonText (names[i]);
-        tabs_[(std::size_t) i].setClickingTogglesState (true);
-        tabs_[(std::size_t) i].setRadioGroupId (100);
-        tabs_[(std::size_t) i].setTooltip (tips[i]);
-        tabs_[(std::size_t) i].onClick = [this, i] { setMode (tabMode_[i]); };
-        addAndMakeVisible (tabs_[(std::size_t) i]);
-    }
-    modeDesc_.setFont (juce::Font (11.0f));
-    modeDesc_.setColour (juce::Label::textColourId, ToneFillLookAndFeel::muted());
-    modeDesc_.setJustificationType (juce::Justification::centred);
-    addAndMakeVisible (modeDesc_);
-
     initKnob (*this, threshold_.slider, threshold_.label, "Clean Level",
               "Auto mode: how quiet a moment must be to count as room tone. Lower = stricter, rejects claps, clicks and loud bits.");
     initKnob (*this, speech_.slider,    speech_.label,    "Voice Reject",
@@ -72,12 +64,14 @@ MainView::MainView (PluginProcessor& processor) : processor_ (processor)
               "Length of each real chunk taken from the source. Longer = more natural texture, shorter = smoother but more repetitive.");
     initKnob (*this, blend_.slider,     blend_.label,     "Crossfade",
               "How much neighbouring chunks overlap and blend together. Higher = smoother joins.");
-    initKnob (*this, variation_.slider, variation_.label, "Variation",
-              "Breaks the looped feel: lengthens the render (15 to 60 s) and jitters each chunk level so repeats sound different.");
-    initKnob (*this, tonal_.slider,     tonal_.label,     "Hum Level",
-              "Level of the steady tonal / hum layer (e.g. 50 Hz mains) re-added on top. 0 = none.");
-    initKnob (*this, movement_.slider,  movement_.label,  "Movement",
-              "Slow level breathing over time. Higher = more living, less static.");
+    initKnob (*this, variation_.slider, variation_.label, "Smoothness",
+              "Enhance only: resynthesis window size. Higher = smoother, more diffuse; lower = keeps more of the source's fine texture.");
+    initKnob (*this, minFill_.slider,   minFill_.label,   "Min Fill",
+              "Minimum length a stable audio fragment must have to be used in the fill. Longer = fewer, more consistent chunks and fewer audible joins.");
+    minFill_.slider.setRange (0.2, 5.0, 0.05);
+    minFill_.slider.setTextValueSuffix (" s");
+    initKnob (*this, flatness_.slider,  flatness_.label,  "Flatness",
+              "How strict the stationarity requirement is. Higher = only very steady stretches, so the fill avoids audible jumps and crossfades.");
     initKnob (*this, gain_.slider,      gain_.label,      "Output",
               "Output volume, in dB.");
     gain_.slider.setRange (-24.0, 24.0, 0.1);
@@ -86,17 +80,17 @@ MainView::MainView (PluginProcessor& processor) : processor_ (processor)
     length_.slider.setRange (0.5, 30.0, 0.1);
     length_.slider.setTextValueSuffix (" s");
 
-    threshold_.icon = IcSparkle; speech_.icon   = IcDialog;  fragment_.icon = IcTarget;
-    blend_.icon     = IcCross;   variation_.icon = IcShuffle; tonal_.icon    = IcSine;
-    movement_.icon  = IcWave;    gain_.icon      = IcSliders; length_.icon   = IcClock;
+    threshold_.icon = IcSparkle; speech_.icon    = IcDialog;  minFill_.icon  = IcWave;
+    flatness_.icon  = IcSine;    fragment_.icon  = IcTarget;  blend_.icon    = IcCross;
+    variation_.icon = IcShuffle; gain_.icon      = IcSliders; length_.icon   = IcClock;
 
     thA_ = std::make_unique<SA> (apvts, IDs::threshold,      threshold_.slider);
     spA_ = std::make_unique<SA> (apvts, IDs::speechReject,   speech_.slider);
     frA_ = std::make_unique<SA> (apvts, IDs::fragment,       fragment_.slider);
     blA_ = std::make_unique<SA> (apvts, IDs::blend,          blend_.slider);
     vaA_ = std::make_unique<SA> (apvts, IDs::randomness,     variation_.slider);
-    toA_ = std::make_unique<SA> (apvts, IDs::tonalRetention, tonal_.slider);
-    moA_ = std::make_unique<SA> (apvts, IDs::movement,       movement_.slider);
+    mfA_ = std::make_unique<SA> (apvts, IDs::minFill,        minFill_.slider);
+    flA_ = std::make_unique<SA> (apvts, IDs::flatness,       flatness_.slider);
     gaA_ = std::make_unique<SA> (apvts, IDs::outputGain,     gain_.slider);
     leA_ = std::make_unique<SA> (apvts, IDs::renderLength,   length_.slider);
 
@@ -119,12 +113,15 @@ MainView::MainView (PluginProcessor& processor) : processor_ (processor)
     addAndMakeVisible (wholeBtn_);
     wfA_ = std::make_unique<BA> (apvts, IDs::wholeFile, wholeBtn_);
 
-    learnBtn_.setClickingTogglesState (true);
-    learnBtn_.setTooltip ("Pro Tools AudioSuite workflow. ON: select clean room tone and Render/Preview "
-                          "to LEARN it (audio is left untouched). OFF: select a gap and Render to GENERATE "
-                          "room tone from what was learned.");
-    addAndMakeVisible (learnBtn_);
-    lrA_ = std::make_unique<BA> (apvts, IDs::learnMode, learnBtn_);
+    waveBtn_.setTooltip ("Open a large waveform view with a timecode ruler, zoom and scroll for precise selecting.");
+    waveBtn_.onClick = [this] { openWaveformWindow(); };
+    addAndMakeVisible (waveBtn_);
+
+    enhanceBtn_.setClickingTogglesState (true);
+    enhanceBtn_.setTooltip ("Extra smoothing resynthesis for when the selected fragments won't blend into a clean bed. "
+                            "Off = real-audio bed (Chunk Size / Crossfade). On = enables Smoothness and Mix.");
+    addAndMakeVisible (enhanceBtn_);
+    enA_ = std::make_unique<BA> (apvts, IDs::paulStretch, enhanceBtn_);
 
     regenBtn_.setTooltip ("New random variation of the fill (same settings).");
     regenBtn_.onClick = [this] { auto& ss = processor_.sessionState(); ss.seed.fetch_add (0x9E3779B97F4A7C15ULL); ss.generation.fetch_add (1); };
@@ -164,28 +161,26 @@ MainView::MainView (PluginProcessor& processor) : processor_ (processor)
 
 MainView::~MainView() { stopTimer(); setLookAndFeel (nullptr); }
 
-void MainView::setMode (int modeIndex)
+void MainView::openWaveformWindow()
 {
-    if (auto* p = processor_.parameters().apvts.getParameter (IDs::mode))
-        p->setValueNotifyingHost ((float) modeIndex / 3.0f);
-    updateEmphasis (modeIndex);
+    if (waveWin_ == nullptr)
+    {
+        waveWin_ = std::make_unique<WaveformWindow> (processor_.sessionState());
+        waveWin_->onClose = [this] { waveWin_.reset(); };
+    }
+    else
+        waveWin_->toFront (true);
 }
 
-void MainView::updateEmphasis (int mode)
+void MainView::updateEmphasis()
 {
     auto set = [] (Knob& k, bool on) { const float a = on ? 1.0f : 0.36f; k.slider.setAlpha (a); k.label.setAlpha (a); };
-    // Both exposed modes are the real-audio grain cloud, so the same knobs apply; only Movement
-    // differs (Complex), and the synth Hum Level is unused (the real grains already carry the hum).
+    const bool enhance = processor_.parameters().apvts.getRawParameterValue (IDs::paulStretch)->load() > 0.5f;
     set (threshold_, true); set (speech_, true);
-    set (fragment_, true);  set (blend_, true); set (variation_, true);
-    set (tonal_, false);
-    set (movement_, mode == 2); // Complex only
+    set (minFill_, true);   set (flatness_, true);        // stability selection (always)
+    set (fragment_, ! enhance); set (blend_, ! enhance);  // grain-cloud shaping (Enhance OFF)
+    set (variation_, enhance);                            // Smoothness (Enhance ON)
     set (gain_, true); set (length_, true);
-
-    modeDesc_.setText (mode == 2
-        ? "Complex - real room tone with slow movement (alive over long fills)."
-        : "Ambience - steady real room tone, a constant bed from the recording.",
-        juce::dontSendNotification);
 }
 
 void MainView::paint (juce::Graphics& g)
@@ -276,6 +271,29 @@ void MainView::paint (juce::Graphics& g)
         g.drawText (hint, waveArea_.reduced (6, 0).removeFromTop (13), juce::Justification::centredLeft, false);
     }
 
+    // Timecode ruler under the waveform (0:00 -> end of the analysed source, scaled to length).
+    {
+        const int srcN = processor_.sessionState().sourceSamples.load();
+        const double sr = processor_.sessionState().sourceSampleRate.load();
+        const double totalSec = (srcN > 0 && sr > 0) ? srcN / sr : 0.0;
+        g.setColour (ToneFillLookAndFeel::muted());
+        g.setFont (juce::Font (9.5f));
+        if (totalSec > 0.0)
+        {
+            const int nLab = 6;
+            for (int i = 0; i <= nLab; ++i)
+            {
+                const float x = waveRuler_.getX() + (float) i / nLab * waveRuler_.getWidth();
+                g.setColour (ToneFillLookAndFeel::line());
+                g.fillRect (x, (float) waveRuler_.getY(), 1.0f, 4.0f);
+                g.setColour (ToneFillLookAndFeel::muted());
+                const auto just = i == nLab ? juce::Justification::centredRight : juce::Justification::centredLeft;
+                g.drawText (formatClock (totalSec * i / nLab),
+                            juce::Rectangle<int> ((int) x - (i == nLab ? 60 : -2), waveRuler_.getY() + 3, 60, 10), just, false);
+            }
+        }
+    }
+
     // Output meter.
     g.setColour (ToneFillLookAndFeel::panel());
     g.fillRoundedRectangle (meterArea_.toFloat(), 5.0f);
@@ -291,8 +309,14 @@ void MainView::paint (juce::Graphics& g)
     g.setFont (juce::Font (11.0f));
     g.drawText ("out " + juce::String (meterDb_, 1) + " dB", meterArea_.translated (meterArea_.getWidth() + 8, 0).withWidth (90),
                 juce::Justification::centredLeft, false);
-    g.drawText (ph + "   ·   partials " + juce::String (ss.numPartials.load())
-                + "   ·   clean " + juce::String (ss.learnSeconds.load(), 1) + " s"
+    const float seam = ss.seamRiskDb.load();
+    const juce::String seamStr = seam > 0.05f
+        ? "   ·   seam " + juce::String (seam, 1) + " dB" + (seam > 4.0f ? " ⚠" : "")
+        : juce::String();
+    g.drawText (ph + "   ·   used " + juce::String (ss.learnSeconds.load(), 1) + " s"
+                + " (" + juce::String (ss.cleanChunks.load()) + " chunks)"
+                + "   ·   avail " + juce::String (ss.availSeconds.load(), 1) + " s"
+                + seamStr
                 + "   ·   in " + juce::String (ss.levelDb.load(), 0) + " dB",
                 getLocalBounds().removeFromBottom (20).reduced (16, 2), juce::Justification::centredLeft, false);
 }
@@ -302,55 +326,50 @@ void MainView::resized()
     auto r = getLocalBounds().reduced (16);
     auto head = r.removeFromTop (40);
     {
-        auto toggle = head.removeFromRight (140).withSizeKeepingCentre (140, 24);
-        autoBtn_.setBounds (toggle.removeFromLeft (70));
+        auto toggle = head.removeFromRight (130).withSizeKeepingCentre (130, 24);
+        autoBtn_.setBounds (toggle.removeFromLeft (65));
         manualBtn_.setBounds (toggle);
-        head.removeFromRight (10);
-        wholeBtn_.setBounds (head.removeFromRight (54).withSizeKeepingCentre (54, 24));
         head.removeFromRight (8);
-        learnBtn_.setBounds (head.removeFromRight (64).withSizeKeepingCentre (64, 24));
+        enhanceBtn_.setBounds (head.removeFromRight (74).withSizeKeepingCentre (74, 24));
+        head.removeFromRight (8);
+        wholeBtn_.setBounds (head.removeFromRight (48).withSizeKeepingCentre (48, 24));
+        head.removeFromRight (8);
+        waveBtn_.setBounds (head.removeFromRight (84).withSizeKeepingCentre (84, 24));
     }
     titleLbl_.setBounds (head.removeFromTop (22));
     subLbl_.setBounds (head);
     r.removeFromTop (4);
 
-    waveArea_ = r.removeFromTop (52);
-    r.removeFromTop (12);
-
-    auto tabRow = r.removeFromTop (28);
-    const int tw = (tabRow.getWidth() - 8) / 2;
-    for (int i = 0; i < 2; ++i) { tabs_[(std::size_t) i].setBounds (tabRow.removeFromLeft (tw)); tabRow.removeFromLeft (8); }
-    r.removeFromTop (4);
-    modeDesc_.setBounds (r.removeFromTop (14));
+    waveArea_ = r.removeFromTop (46);
+    waveRuler_ = r.removeFromTop (12);
     r.removeFromTop (8);
 
     cards_.clear();
-    auto knobRow = [this, &r] (std::initializer_list<MainView::Knob*> ks)
+    auto placeKnob = [this] (Knob* k, juce::Rectangle<int> cell)
+    {
+        auto inner = cell.reduced (12, 10);
+        auto labelStrip = inner.removeFromTop (16);
+        labelStrip.removeFromLeft (20);                          // room for the icon
+        k->label.setBounds (labelStrip);
+        inner.removeFromTop (2);
+        const auto valueBox = inner.withTop (inner.getBottom() - 20);
+        k->slider.setBounds (inner);                            // rotary + its text box
+        cards_.push_back ({ cell, valueBox, k->icon });
+    };
+    auto rowCells = [&r] (int count)
     {
         const int gap = 10;
         auto row = r.removeFromTop (124);
-        const int n = (int) ks.size();
-        const int cw = (row.getWidth() - gap * (n - 1)) / n;
-        int idx = 0;
-        for (auto* k : ks)
-        {
-            auto cell = row.removeFromLeft (cw);
-            if (idx++ < n - 1) row.removeFromLeft (gap);
-
-            auto inner = cell.reduced (12, 10);
-            auto labelStrip = inner.removeFromTop (16);
-            labelStrip.removeFromLeft (20);                          // room for the icon
-            k->label.setBounds (labelStrip);
-            inner.removeFromTop (2);
-            const auto valueBox = inner.withTop (inner.getBottom() - 20); // bottom 20 px
-            k->slider.setBounds (inner);                            // rotary + its text box
-            cards_.push_back ({ cell, valueBox, k->icon });
-        }
+        const int cw = (row.getWidth() - gap * (count - 1)) / count;
+        std::vector<juce::Rectangle<int>> cells;
+        for (int i = 0; i < count; ++i) { cells.push_back (row.removeFromLeft (cw)); if (i < count - 1) row.removeFromLeft (gap); }
         r.removeFromTop (10);
+        return cells;
     };
-    knobRow ({ &threshold_, &speech_, &fragment_ });
-    knobRow ({ &blend_, &variation_, &tonal_ });
-    knobRow ({ &movement_, &gain_, &length_ });
+
+    { auto c = rowCells (3); placeKnob (&threshold_, c[0]); placeKnob (&speech_,   c[1]); placeKnob (&minFill_, c[2]); }
+    { auto c = rowCells (3); placeKnob (&flatness_,  c[0]); placeKnob (&fragment_, c[1]); placeKnob (&blend_,   c[2]); }
+    { auto c = rowCells (3); placeKnob (&variation_, c[0]); placeKnob (&gain_,     c[1]); placeKnob (&length_,  c[2]); }
 
     r.removeFromTop (2);
     auto normRow = r.removeFromTop (24);
@@ -377,16 +396,16 @@ void MainView::timerCallback()
     auto& ss = processor_.sessionState();
 
     bool changed = false;
-    const int mode = (int) apvts.getRawParameterValue (IDs::mode)->load();
-    if (ss.mode.load() != mode) { ss.mode.store (mode); changed = true; }
     auto mirror = [&changed] (std::atomic<float>& dst, float v) { if (std::abs (dst.load() - v) > 1.0e-4f) { dst.store (v); changed = true; } };
+    auto mirrorB = [&changed] (std::atomic<bool>& dst, bool v) { if (dst.load() != v) { dst.store (v); changed = true; } };
     mirror (ss.threshold,      apvts.getRawParameterValue (IDs::threshold)->load());
     mirror (ss.speechReject,   apvts.getRawParameterValue (IDs::speechReject)->load());
     mirror (ss.fragment,       apvts.getRawParameterValue (IDs::fragment)->load());
     mirror (ss.blend,          apvts.getRawParameterValue (IDs::blend)->load());
     mirror (ss.randomness,     apvts.getRawParameterValue (IDs::randomness)->load());
-    mirror (ss.tonalRetention, apvts.getRawParameterValue (IDs::tonalRetention)->load());
-    mirror (ss.movement,       apvts.getRawParameterValue (IDs::movement)->load());
+    mirror (ss.minFill,        apvts.getRawParameterValue (IDs::minFill)->load());
+    mirror (ss.flatness,       apvts.getRawParameterValue (IDs::flatness)->load());
+    mirrorB (ss.paulStretch,   apvts.getRawParameterValue (IDs::paulStretch)->load() > 0.5f);
     if (changed) ss.generation.fetch_add (1);
     ss.outputGain.store (juce::Decibels::decibelsToGain (apvts.getRawParameterValue (IDs::outputGain)->load()));
     ss.renderLength.store (apvts.getRawParameterValue (IDs::renderLength)->load());
@@ -410,12 +429,11 @@ void MainView::timerCallback()
     normReadout_.setText (meas > -119.0f ? "now " + juce::String (meas, 1) + (normLufs ? " LUFS" : " dBFS") : "",
                           juce::dontSendNotification);
 
-    // Reflect mode in the tabs + emphasis.
-    for (int i = 0; i < 2; ++i) tabs_[(std::size_t) i].setToggleState (tabMode_[i] == mode, juce::dontSendNotification);
-    updateEmphasis (mode);
+    updateEmphasis();
     if (normOn) { gain_.slider.setAlpha (0.36f); gain_.label.setAlpha (0.36f); } // bypassed by Normalize
 
     wave_ = ss.getWave();
+    if (! dragging_) selections_ = ss.getManualRanges(); // reflect edits made in the Waveform window
     meterDb_ = meterDb_ * 0.7f + ss.outMeterDb.load() * 0.3f;
     repaint();
 }
@@ -432,9 +450,17 @@ void MainView::exportWav()
     const int loopLen = (int) (*fill)[0].size();
     const int outLen = juce::jmax (1, (int) std::lround (lengthSec * sr));
 
+    // S7.3: loudness is measured on the ACTUAL deliverable. The stored fill was normalized on the
+    // internal loop; a short Export Len crop can drift from that, so we re-measure and correct on
+    // the exact export buffer below. Capture the current Normalize settings for that pass.
+    auto& ss = processor_.sessionState();
+    const bool  normOn     = ss.normalizeEnabled.load();
+    const bool  normLufs   = ss.normalizeLufs.load();
+    const float normTarget = ss.normalizeTarget.load();
+
     chooser_ = std::make_unique<juce::FileChooser> ("Export ToneFill ambience", juce::File(), "*.wav");
     chooser_->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles,
-                           [fill, sr, loopLen, outLen] (const juce::FileChooser& fc)
+                           [fill, sr, loopLen, outLen, normOn, normLufs, normTarget] (const juce::FileChooser& fc)
     {
         const auto file = fc.getResult();
         if (file == juce::File()) return;
@@ -454,6 +480,28 @@ void MainView::exportWav()
             auto& dst = tiled[(std::size_t) ch];
             for (int i = 0; i < outLen; ++i) dst[(std::size_t) i] = src[(std::size_t) (i % loopLen)];
         }
+
+        // S7.3: measure loudness on this exact export buffer and correct to target, so any Export Len
+        // hits the requested LUFS/peak precisely (idempotent for a full-loop-length export).
+        if (normOn)
+        {
+            const float meas = normLufs ? tonefill::dsp::integratedLufs (tiled, sr)
+                                        : tonefill::dsp::peakDbfs (tiled);
+            if (meas > -119.0f)
+            {
+                float gainDb = normTarget - meas;
+                if (normLufs) // keep true peak under -1 dBFS
+                {
+                    const float peakDb = tonefill::dsp::peakDbfs (tiled);
+                    const float newPeak = peakDb + gainDb;
+                    if (newPeak > -1.0f) gainDb -= (newPeak + 1.0f);
+                }
+                const float g = std::pow (10.0f, gainDb / 20.0f);
+                if (std::fabs (g - 1.0f) > 1.0e-4f)
+                    for (auto& c : tiled) for (auto& smp : c) smp *= g;
+            }
+        }
+
         std::vector<const float*> ptrs;
         for (const auto& c : tiled) ptrs.push_back (c.data());
         writer->writeFromFloatArrays (ptrs.data(), numCh, outLen);

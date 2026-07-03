@@ -16,6 +16,7 @@ set(PLUGIN_SOURCES
     PluginEditor.cpp
     ParameterState.cpp
     ui/MainView.cpp
+    ui/WaveformWindow.cpp
     ara/ARAIntegrationFacade.cpp)
 
 # Compiled ONLY when the ARA SDK is available. These are the real JUCE<->ARA bindings that
@@ -55,7 +56,7 @@ juce_add_plugin(ToneFillPlugin
     BUNDLE_ID                com.cactuzzsound.tonefill
     PLUGIN_MANUFACTURER_CODE Catz
     PLUGIN_CODE              Tfil
-    FORMATS                  VST3 AU ${_tonefill_aax_kw}
+    FORMATS                  VST3 AU   # AAX is the native HostProcessor build under aax/ (not JUCE)
     ${_tonefill_ara_kw}                       # IS_ARA_EFFECT TRUE, or nothing
     IS_SYNTH                 FALSE
     NEEDS_MIDI_INPUT         FALSE

@@ -27,8 +27,11 @@ public:
         static constexpr auto fragment       = "fragment";       // Ambience: real-fragment length
         static constexpr auto blend          = "blend";          // Ambience: crossfade amount
         static constexpr auto randomness     = "randomness";     // variation: loop length + jitter
-        static constexpr auto tonalRetention = "tonalRetention"; // synth: hum level
-        static constexpr auto movement       = "movement";       // synth: slow breathing
+        static constexpr auto tonalRetention = "tonalRetention"; // (legacy, no UI)
+        static constexpr auto movement       = "movement";       // (legacy, no UI)
+        static constexpr auto minFill        = "minFill";        // min stable-fragment length (seconds)
+        static constexpr auto flatness       = "flatness";       // stationarity strictness (0..1)
+        static constexpr auto paulStretch    = "enhance";        // Enhance: PaulStretch resynthesis on/off
         static constexpr auto outputGain     = "outputGain";     // dB
         static constexpr auto normEnabled    = "normEnabled";    // normalize to a loudness target
         static constexpr auto normTarget     = "normTarget";     // target value (dBFS or LUFS)

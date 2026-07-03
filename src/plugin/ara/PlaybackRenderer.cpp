@@ -102,6 +102,7 @@ public:
             learnSrc.setSize (effCh, n);
             for (int ch = 0; ch < effCh; ++ch) learnSrc.copyFrom (ch, 0, src, ch, 0, n);
             ss.sourceSamples.store (n);
+            ss.sourceSampleRate.store (sampleRate);
             araLog ("readSource: effCh=" + juce::String (effCh) + " (src ch=" + juce::String (channels) + ")");
             return true;
         };
@@ -127,6 +128,8 @@ public:
             ctx.useManualSelection = useManual;
             ctx.cleanThreshold = threshold;
             ctx.speechReject = ss.speechReject.load();
+            ctx.flatness = ss.flatness.load();
+            ctx.minFillSeconds = ss.minFill.load();
             ctx.sourceContentHash = (std::uint64_t) n;
             ss.phase.store (1);
             auto r = session.run (ctx, cancel);
@@ -137,13 +140,17 @@ public:
                                   ? -120.0f : 20.0f * std::log10 (m->noisePerChannel[0].targetRms);
             ss.numPartials.store (nP);
             ss.learnSeconds.store (m->learnMaterialSeconds);
+            ss.cleanChunks.store ((int) m->cleanRanges.size());
+            ss.availSeconds.store (m->availableCleanSeconds);
+            ss.seamRiskDb.store (m->joinRoughnessDb);
             ss.levelDb.store (lvl);
             ss.phase.store (2);
             araLog ("analyze: thr=" + juce::String (threshold) + " partials=" + juce::String (nP)
                     + " learnSec=" + juce::String (m->learnMaterialSeconds) + " levelDb=" + juce::String (lvl));
 
-            // Waveform for the UI: peak per bin + an (approximate, level-based) clean flag.
-            const int bins = 220;
+            // Waveform for the UI: peak per bin + clean flag. Higher resolution now so the large
+            // waveform window can zoom in and still show detail.
+            const int bins = 2000;
             tonefill::plugin::SessionState::WaveData wd;
             wd.peak.assign ((std::size_t) bins, 0.0f);
             wd.clean.assign ((std::size_t) bins, 0);
@@ -213,7 +220,7 @@ public:
 
         engine::synthesis::AmbienceRenderer renderer;
         engine::model::AmbienceModelPtr model;
-        float lastThreshold = -1.0f, lastSpeech = -1.0f;
+        float lastThreshold = -1.0f, lastSpeech = -1.0f, lastFlat = -1.0f, lastMinFill = -1.0f;
         int lastGen = -1, lastManualGen = -1;
         bool lastManual = false;
 
@@ -280,16 +287,20 @@ public:
                 model = nullptr; // force re-analyze with the new window
             }
 
-            // Re-analyze when an analysis input changes: Threshold, Speech Reject, manual on/off,
-            // or the manual selection itself.
+            // Re-analyze when an analysis input changes: Threshold, Speech Reject, Flatness, Min
+            // Fill, manual on/off, or the manual selection itself.
+            const float flat = ss.flatness.load();
+            const float minf = ss.minFill.load();
             if (model == nullptr || std::abs (thr - lastThreshold) > 1.0e-4f
-                || std::abs (spk - lastSpeech) > 1.0e-4f || manual != lastManual || mGen != lastManualGen)
+                || std::abs (spk - lastSpeech) > 1.0e-4f || std::abs (flat - lastFlat) > 1.0e-4f
+                || std::abs (minf - lastMinFill) > 1.0e-4f || manual != lastManual || mGen != lastManualGen)
             {
                 const auto ranges = manual ? ss.getManualRanges() : std::vector<std::pair<int, int>>{};
                 const bool useManual = manual && ! ranges.empty();
                 const juce::AudioBuffer<float> learnInput = useManual ? buildManual (ranges) : learnSrc;
                 model = analyze (thr, learnInput, useManual);
-                lastThreshold = thr; lastSpeech = spk; lastManual = manual; lastManualGen = mGen;
+                lastThreshold = thr; lastSpeech = spk; lastFlat = flat; lastMinFill = minf;
+                lastManual = manual; lastManualGen = mGen;
                 needRender = true;
             }
             if (gen != lastGen) { lastGen = gen; needRender = true; }
@@ -297,17 +308,18 @@ public:
             if (needRender && model != nullptr)
             {
                 engine::model::RenderSettings s;
-                s.mode = (engine::model::Mode) juce::jlimit (0, 3, ss.mode.load());
-                s.tonalRetention = ss.tonalRetention.load();
-                s.textureAmount = ss.textureAmount.load();
-                s.movement = ss.movement.load();
+                s.mode = engine::model::Mode::Ambience; // only exposed mode
+                s.paulStretch = ss.paulStretch.load();  // Enhance
                 s.fragmentMs = 200.0f + ss.fragment.load() * 2800.0f;   // 200..3000 ms
                 s.blendFrac  = 0.05f + ss.blend.load() * 0.45f;          // 5..50 %
                 s.randomness = ss.randomness.load();
                 s.seed = ss.seed.load();
-                // Loop length grows with Variation so the exact repeat happens far less often
-                // (the main cause of the "looped" feel on short samples).
-                const double loopSec = 15.0 + (double) s.randomness * 45.0;  // 15..60 s
+                // Loop length is DECOUPLED from Smoothness (S7.1). It now scales with how much clean
+                // material we actually have: more source -> a longer loop before the exact repeat, so
+                // the "looped" feel dissolves on rich captures while short ones stay compact. Turning
+                // Smoothness no longer changes the loop length.
+                const double availSec = (double) model->learnMaterialSeconds;
+                const double loopSec  = juce::jlimit (15.0, 60.0, availSec * 4.0);
                 const int loopLen = (int) (loopSec * sampleRate);
                 const int xf = (int) (0.25 * sampleRate); // 250 ms seamless-loop crossfade
                 s.targetSampleRate = sampleRate;

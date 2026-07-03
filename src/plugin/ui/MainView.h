@@ -15,6 +15,8 @@ namespace tonefill::plugin { class PluginProcessor; }
 
 namespace tonefill::plugin::ui
 {
+class WaveformWindow;
+
 class MainView : public juce::Component, private juce::Timer
 {
 public:
@@ -30,8 +32,7 @@ public:
 private:
     void timerCallback() override;
     void exportWav();
-    void setMode (int modeIndex);
-    void updateEmphasis (int modeIndex);
+    void updateEmphasis();
     void pushSelections();                 // selections_ -> SessionState (source-sample ranges)
     int  xToSample (int x) const;          // waveform x -> source sample
     float sampleToX (int sample) const;    // source sample -> waveform x
@@ -42,23 +43,21 @@ private:
     juce::TooltipWindow tooltip_ { this, 600 }; // shows hover help for every control
 
     juce::Label titleLbl_, subLbl_;
-    std::array<juce::TextButton, 2> tabs_;             // display order: Ambience, Complex
-    static constexpr int tabMode_[2] = { 3, 2 };       // -> engine mode index (Ambience, Complex)
-    juce::Label modeDesc_;                             // one-line explanation of the active mode
 
     // Per-knob glyph drawn at the card's top-left (matches the reference UI).
     enum Icon { IcSparkle, IcDialog, IcTarget, IcCross, IcShuffle, IcSine, IcWave, IcSliders, IcClock };
     struct Knob { juce::Slider slider; juce::Label label; int icon = 0; };
-    Knob threshold_, speech_, fragment_, blend_, variation_, tonal_, movement_, gain_, length_;
+    Knob threshold_, speech_, fragment_, blend_, variation_, minFill_, flatness_, gain_, length_;
 
-    // Card + value-box rectangles for the 9 knobs, rebuilt in resized(), drawn in paint().
+    // Card + value-box rectangles for the knobs, rebuilt in resized(), drawn in paint().
     struct CardLayout { juce::Rectangle<int> card, value; int icon; };
     std::vector<CardLayout> cards_;
 
     juce::TextButton regenBtn_ { "Regenerate" }, exportBtn_ { "Export WAV" };
     juce::TextButton autoBtn_ { "Auto" }, manualBtn_ { "Manual" }; // learn-source mode toggle
+    juce::TextButton enhanceBtn_ { "Enhance" };                    // PaulStretch resynthesis on/off
     juce::TextButton wholeBtn_ { "Full" };                         // analyze whole item vs first 4 min
-    juce::TextButton learnBtn_ { "Learn" };                        // AudioSuite: learn vs generate
+    juce::TextButton waveBtn_ { "Waveform" };                      // opens the large waveform window
 
     // Loudness normalize: bake the fill to a dBFS-peak or LUFS target (disables the Output knob).
     juce::TextButton normBtn_ { "Normalize" };
@@ -69,14 +68,17 @@ private:
     using SA  = juce::AudioProcessorValueTreeState::SliderAttachment;
     using BA  = juce::AudioProcessorValueTreeState::ButtonAttachment;
     using CBA = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
-    std::unique_ptr<SA> thA_, spA_, frA_, blA_, vaA_, toA_, moA_, gaA_, leA_, ntA_;
-    std::unique_ptr<BA>  neA_, wfA_, lrA_;
+    std::unique_ptr<SA> thA_, spA_, frA_, blA_, vaA_, mfA_, flA_, gaA_, leA_, ntA_;
+    std::unique_ptr<BA>  neA_, wfA_, enA_;
     std::unique_ptr<CBA> nuA_;
+
+    void openWaveformWindow();
+    std::unique_ptr<WaveformWindow> waveWin_;
 
     std::unique_ptr<juce::FileChooser> chooser_;
     SessionState::WaveData wave_;
     float meterDb_ = -120.0f;
-    juce::Rectangle<int> waveArea_, meterArea_;
+    juce::Rectangle<int> waveArea_, waveRuler_, meterArea_;
 
     // Manual learn-region selection (source-sample coordinates).
     bool manualMode_ = false;

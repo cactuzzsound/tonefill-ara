@@ -30,9 +30,12 @@ APVTS::ParameterLayout ParameterState::createLayout()
     layout.add (std::make_unique<AudioParameterFloat> (ParameterID { IDs::speechReject, 1 },   "Voice Reject",  pct(), 0.5f));
     layout.add (std::make_unique<AudioParameterFloat> (ParameterID { IDs::fragment, 1 },       "Chunk Size",    pct(), 0.4f));
     layout.add (std::make_unique<AudioParameterFloat> (ParameterID { IDs::blend, 1 },          "Crossfade",     pct(), 0.3f));
-    layout.add (std::make_unique<AudioParameterFloat> (ParameterID { IDs::randomness, 1 },     "Variation",     pct(), 0.4f));
+    layout.add (std::make_unique<AudioParameterFloat> (ParameterID { IDs::randomness, 1 },     "Smoothness",    pct(), 0.4f));
     layout.add (std::make_unique<AudioParameterFloat> (ParameterID { IDs::tonalRetention, 1 }, "Hum Level",     pct(), 1.0f));
-    layout.add (std::make_unique<AudioParameterFloat> (ParameterID { IDs::movement, 1 },       "Movement",      pct(), 0.2f));
+    layout.add (std::make_unique<AudioParameterFloat> (ParameterID { IDs::minFill, 1 },  "Min Fill",
+        NormalisableRange<float> (0.2f, 5.0f, 0.05f), 2.0f));
+    layout.add (std::make_unique<AudioParameterFloat> (ParameterID { IDs::flatness, 1 }, "Flatness", pct(), 0.7f));
+    layout.add (std::make_unique<juce::AudioParameterBool> (ParameterID { IDs::paulStretch, 1 }, "Enhance", false));
     layout.add (std::make_unique<AudioParameterFloat> (ParameterID { IDs::outputGain, 1 }, "Output",
         NormalisableRange<float> (-24.0f, 24.0f, 0.1f), 0.0f));
     layout.add (std::make_unique<juce::AudioParameterBool> (ParameterID { IDs::normEnabled, 1 }, "Normalize", false));

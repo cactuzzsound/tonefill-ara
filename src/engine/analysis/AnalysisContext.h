@@ -32,9 +32,14 @@ struct AnalysisContext
     bool   leftEnabled        = true;
     bool   rightEnabled       = true;
 
-    // Manual mode: leftContext already holds ONLY the user-selected material -> skip the
-    // automatic clean-ambience detection and learn from it as-is.
+    // Manual mode: leftContext already holds ONLY the user-selected material. The level/speech
+    // gates are trusted-off, but the flatness + min-fill selection still runs on it.
     bool   useManualSelection = false;
+
+    // Stability selection: keep only locally-flat (stationary) runs of at least minFillSeconds,
+    // so the fill uses long consistent chunks and avoids audible crossfades / jumps.
+    float  flatness        = 0.7f;   // 0..1 strictness (higher = only very flat frames)
+    float  minFillSeconds  = 2.0f;   // minimum contiguous stable run
 
     // Identifies the source range so the current-model cache can key on it. Computed by the facade.
     std::uint64_t sourceContentHash = 0;

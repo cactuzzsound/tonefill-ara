@@ -30,6 +30,7 @@ add_library(tonefill_engine STATIC
     src/dsp/Loudness.cpp
     src/dsp/NoiseModel.cpp
     src/dsp/SpectralResynth.cpp
+    src/dsp/PaulStretch.cpp
 
     src/engine/analysis/AnalysisSession.cpp
     src/engine/analysis/AmbienceModelBuilder.cpp
@@ -75,6 +76,12 @@ endif()
 # Plugin target (ARA-enabled VST3 + AU). Defined in its own list file.
 # ---------------------------------------------------------------------------
 add_subdirectory(src/plugin)
+
+# ---------------------------------------------------------------------------
+# Native AAX AudioSuite (HostProcessor) client. Self-guarded: builds only when
+# -DAAX_SDK_PATH is set. Shares tonefill_engine with the JUCE client above.
+# ---------------------------------------------------------------------------
+add_subdirectory(aax)
 
 # ---------------------------------------------------------------------------
 # Offline harness: runs the engine on WAV files with no host / no ARA.

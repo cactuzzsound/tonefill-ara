@@ -16,7 +16,8 @@ struct RenderSettings
     Mode  mode           = Mode::Hybrid;
     float tonalRetention = 1.0f;  // 0..1
     float textureAmount  = 0.5f;  // 0..1, grain vs noise balance
-    float movement       = 0.2f;  // 0..1, macro-envelope depth/rate
+    float movement       = 0.5f;  // Mix: dry grain cloud <-> wet PaulStretch (Enhance mode)
+    bool  paulStretch    = false; // Enhance: PaulStretch resynthesis on top of the real material
     float randomness     = 0.4f;  // 0..1, jitter + grain-path entropy
     float stereoWidth    = 0.5f;  // 0..1
     float crossfadeMs    = 40.0f;

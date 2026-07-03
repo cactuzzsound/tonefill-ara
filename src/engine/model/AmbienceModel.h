@@ -47,6 +47,11 @@ struct AmbienceModel
     // Selected clean real ambience per channel (for the Ambience concatenative mode).
     std::vector<std::vector<float>> cleanAudioPerChannel;
 
+    // The single LONGEST contiguous clean run (raw, no concatenation joins). PaulStretch (Enhance)
+    // uses this so its slow pass never crosses a chunk boundary - those boundaries are what cause
+    // the recurring hiss/whoosh.
+    std::vector<std::vector<float>> stableRunPerChannel;
+
     // Robust stationary-noise spectrum of the room tone -> drives constant spectral re-synthesis
     // (the Ambience mode's bed). Empty/invalid falls back to concatenation.
     dsp::NoiseSpectrum noiseSpectrum;
@@ -56,6 +61,8 @@ struct AmbienceModel
 
     // Diagnostics surfaced to the UI (drive warning states; see DiagnosticsLogger).
     float learnMaterialSeconds   = 0.0f;
+    float availableCleanSeconds  = 0.0f; // total clean found before the Min Fill run filter
+    float joinRoughnessDb        = 0.0f; // An5: mean band-dB mismatch across concatenation joins
     bool  speechContaminationHigh = false;
     bool  loopRiskHigh            = false;
 };
