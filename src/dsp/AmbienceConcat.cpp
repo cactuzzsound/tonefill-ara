@@ -100,7 +100,12 @@ void grainCloud (float* out, int n,
     for (int i = 0; i < grainLen; ++i)
         win[(std::size_t) i] = 0.5f - 0.5f * std::cos (twoPi * (float) i / (float) (grainLen - 1));
 
-    std::deque<int> recent;
+    // #4 time-based anti-repeat: each recent grain is remembered with the OUTPUT position it was
+    // placed at, and a source region may not recur until `recencyOut` output samples have passed
+    // (not merely N grains ago). This stops the same excerpts from cycling back audibly on long
+    // renders, where a count-based memory is too shallow.
+    std::deque<std::pair<int, int>> recent; // (source start, output pos)
+    const int recencyOut = std::max (srcLen, grainLen * std::max (1, antiRepeat));
     const int jitter = (int) (variation * (float) hop); // small grid jitter for less regularity
 
     // A2 (context-aware selection): compare window and candidate count. Instead of a purely random
@@ -130,32 +135,37 @@ void grainCloud (float* out, int n,
 
     for (int pos = -grainLen + hop; pos < n; pos += hop)
     {
-        // Draw candidates (honouring anti-repeat) and pick the best continuation of prevStart's tail.
-        int start = 0;
-        float bestCost = 1.0e30f;
+        const int here = std::max (0, pos);
+        while (! recent.empty() && recent.front().second < here - recencyOut) recent.pop_front();
+
+        // Draw candidates and pick the lowest join-cost one that is NOT recently used; if every
+        // candidate is recent (small source), fall back to the lowest-cost candidate overall.
+        float bestFresh = 1.0e30f; int freshStart = -1;
+        float bestAny   = 1.0e30f; int anyStart   = 0;
         for (int attempt = 0; attempt < kCandidates; ++attempt)
         {
             const int cand = (int) (rng.nextFloat() * (float) maxStart);
-            bool tooClose = false;
-            for (int r : recent)
-                if (std::abs (cand - r) < grainLen / 2) { tooClose = true; break; }
-            if (tooClose) continue;
 
-            if (prevStart < 0) { start = cand; break; } // first grain: nothing to match yet
-
-            // Join cost: SSD of the previous grain's tail against this candidate's head.
-            const int tail0 = prevStart + grainLen - cw;
-            float cost = 0.0f;
-            for (int i = 0; i < cw; ++i)
+            // Join cost: SSD of the previous grain's tail against this candidate's head (0 -> random
+            // pick on the very first grain, made deterministic by candidate order).
+            float cost = (float) attempt;
+            if (prevStart >= 0)
             {
-                const float d = src[tail0 + i] - src[cand + i];
-                cost += d * d;
+                const int tail0 = prevStart + grainLen - cw;
+                cost = 0.0f;
+                for (int i = 0; i < cw; ++i) { const float d = src[tail0 + i] - src[cand + i]; cost += d * d; }
             }
-            if (cost < bestCost) { bestCost = cost; start = cand; }
+
+            bool recentlyUsed = false;
+            for (const auto& r : recent)
+                if (std::abs (cand - r.first) < grainLen / 2) { recentlyUsed = true; break; }
+
+            if (cost < bestAny) { bestAny = cost; anyStart = cand; }
+            if (! recentlyUsed && cost < bestFresh) { bestFresh = cost; freshStart = cand; }
+            if (prevStart < 0 && ! recentlyUsed) { freshStart = cand; break; }
         }
-        start = snapToZeroCross (start);
-        recent.push_back (start);
-        if ((int) recent.size() > antiRepeat) recent.pop_front();
+        int start = snapToZeroCross (freshStart >= 0 ? freshStart : anyStart);
+        recent.push_back ({ start, here });
         prevStart = start;
 
         const bool reverse = rng.nextFloat() < 0.5f * variation;

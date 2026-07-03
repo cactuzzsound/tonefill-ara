@@ -15,15 +15,48 @@ void granularResynthesize (float* out, int n,
     std::fill (out, out + n, 0.0f);
 
     // Too short to scramble: tile the source (degenerate fallback).
+    // Too short to scramble: tile the source with a short equal-power crossfade at each wrap
+    // instead of a hard `i % srcLen` loop point (the worst case for seamlessness).
     if (srcLen < 2 * grainLen)
     {
-        for (int i = 0; i < n; ++i) out[i] = src[i % srcLen];
+        const int xf = std::max (1, std::min (srcLen / 8, grainLen / 2));
+        const float halfPi = 1.5707963267948966f;
+        int o = 0; bool firstTile = true;
+        while (o < n)
+        {
+            const int copy = std::min (srcLen, n - o);
+            for (int i = 0; i < copy; ++i)
+            {
+                const float s = src[i];
+                if (! firstTile && i < xf)
+                {
+                    const float g = (float) i / (float) std::max (1, xf - 1) * halfPi;
+                    out[o + i] = out[o + i] * std::cos (g) + s * std::sin (g);
+                }
+                else out[o + i] = s;
+            }
+            o += srcLen - xf;
+            firstTile = false;
+        }
         return;
     }
 
     const auto win = makeWindow (WindowType::Tukey, grainLen, 0.5);
     const int maxStart = srcLen - grainLen;
     const int synHop = grainLen / 2;
+
+    // Zero-cross anchoring: snap a chosen start to the nearest rising zero crossing so each grain
+    // begins near zero (less phase discontinuity under the Tukey OLA, esp. on tonal AC-hum beds).
+    const int snapWin = std::max (8, grainLen / 32);
+    auto snapToZeroCross = [&] (int s) -> int
+    {
+        int best = s, bestDist = snapWin + 1;
+        const int lo = std::max (1, s - snapWin), hi = std::min (maxStart, s + snapWin);
+        for (int k = lo; k <= hi; ++k)
+            if (src[k - 1] <= 0.0f && src[k] > 0.0f)
+            { const int d = std::abs (k - s); if (d < bestDist) { bestDist = d; best = k; } }
+        return best;
+    };
 
     std::vector<float> winSum ((std::size_t) n, 0.0f);
     std::deque<int> recent;
@@ -40,6 +73,7 @@ void granularResynthesize (float* out, int n,
                 if (std::abs (start - r) < grainLen / 2) { tooClose = true; break; }
             if (! tooClose) break;
         }
+        start = snapToZeroCross (start);
         recent.push_back (start);
         if ((int) recent.size() > antiRepeat) recent.pop_front();
 
