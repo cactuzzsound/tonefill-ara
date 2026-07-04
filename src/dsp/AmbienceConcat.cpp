@@ -79,7 +79,8 @@ void concatenateAmbience (float* out, int n,
 void grainCloud (float* out, int n,
                  const float* src, int srcLen,
                  int grainLen, int density,
-                 SeededRng& rng, int antiRepeat, float variation)
+                 SeededRng& rng, int antiRepeat, float variation,
+                 const float* lfProf, int lfProfLen)
 {
     if (n <= 0 || srcLen <= 0) return;
     std::fill (out, out + n, 0.0f);
@@ -154,6 +155,18 @@ void grainCloud (float* out, int n,
                 const int tail0 = prevStart + grainLen - cw;
                 cost = 0.0f;
                 for (int i = 0; i < cw; ++i) { const float d = src[tail0 + i] - src[cand + i]; cost += d * d; }
+                // LF-aware: inflate the join cost when the candidate's low end (LP-500 running-RMS
+                // profile) differs from the previous grain's tail, so grain joins keep the room's
+                // low-frequency weight consistent (a sub-join LF shift reads as "different room").
+                if (lfProf != nullptr && lfProfLen >= srcLen)
+                {
+                    double pl = 0.0, cl = 0.0;
+                    for (int i = 0; i < cw; ++i) { pl += lfProf[tail0 + i]; cl += lfProf[cand + i]; }
+                    const float prevLf = (float) (pl / cw) + 1.0e-9f, candLf = (float) (cl / cw) + 1.0e-9f;
+                    float lfC = std::fabs (20.0f * std::log10 (candLf / prevLf)) / 4.0f; // 1.0 at >=4 dB
+                    lfC = lfC < 0.0f ? 0.0f : (lfC > 1.0f ? 1.0f : lfC);
+                    cost *= 1.0f + 2.0f * lfC; // up to 3x cost at a full LF mismatch
+                }
             }
 
             bool recentlyUsed = false;

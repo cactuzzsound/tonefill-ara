@@ -245,7 +245,7 @@ void AmbienceRenderer::renderAmbience (const model::AmbienceModel& model,
         // crosses a chunk boundary (those boundaries are the recurring hiss the user heard).
         const auto& psSrc = (! model.stableRunPerChannel.empty() && ! model.stableRunPerChannel[0].empty())
                                 ? model.stableRunPerChannel : model.cleanAudioPerChannel;
-        dsp::paulStretch (out.channels, outN, psSrc, windowSamples, settings.seed);
+        dsp::paulStretch (out.channels, outN, psSrc, windowSamples, settings.seed, sr);
 
         // HF correction: PaulStretch can add high-frequency hiss the room tone didn't have. Match
         // the output's high-band level to the SOURCE's with a high-shelf, so we remove only the
@@ -278,12 +278,33 @@ void AmbienceRenderer::renderAmbience (const model::AmbienceModel& model,
         // Enhance OFF: real-audio grain cloud shaped by Chunk Size / Crossfade.
         const int grainLen = juce::jmax (512, (int) (settings.fragmentMs * 0.001 * sr));
         const int density  = juce::jlimit (2, 8, 2 + (int) std::lround ((settings.blendFrac - 0.05f) / 0.45f * 6.0f));
+        // LP-500 running-RMS profile per channel: lets grainCloud keep the room's low end consistent
+        // across grain joins (a sub-join LF shift is the audible "different room" the friend flagged).
+        auto buildLfProfile = [sr] (const std::vector<float>& s)
+        {
+            const int len = (int) s.size();
+            std::vector<float> lpBuf (s);
+            juce::IIRFilter lp; lp.setCoefficients (juce::IIRCoefficients::makeLowPass (sr, 500.0));
+            lp.processSamples (lpBuf.data(), len);
+            std::vector<double> pre ((std::size_t) len + 1, 0.0);
+            for (int i = 0; i < len; ++i) pre[(std::size_t) i + 1] = pre[(std::size_t) i] + (double) lpBuf[(std::size_t) i] * lpBuf[(std::size_t) i];
+            const int win = juce::jmax (1, (int) (sr * 0.020));
+            std::vector<float> prof ((std::size_t) len, 0.0f);
+            for (int i = 0; i < len; ++i)
+            {
+                const int a = juce::jmax (0, i - win / 2), b = juce::jmin (len, i + win / 2 + 1);
+                prof[(std::size_t) i] = (float) std::sqrt ((pre[(std::size_t) b] - pre[(std::size_t) a]) / (double) juce::jmax (1, b - a));
+            }
+            return prof;
+        };
         dsp::SeededRng master (settings.seed);
         for (std::size_t ch = 0; ch < out.channels.size(); ++ch)
         {
             const auto& srcCh = model.cleanAudioPerChannel[juce::jmin (ch, model.cleanAudioPerChannel.size() - 1)];
             auto rng = master.deriveSubStream (ch);
-            dsp::grainCloud (out.channels[ch].data(), outN, srcCh.data(), (int) srcCh.size(), grainLen, density, rng, 12, 0.4f);
+            const auto lfp = buildLfProfile (srcCh);
+            dsp::grainCloud (out.channels[ch].data(), outN, srcCh.data(), (int) srcCh.size(), grainLen, density, rng, 12, 0.4f,
+                             lfp.data(), (int) lfp.size());
         }
     }
     normaliseTo (out.channels, targetRms);

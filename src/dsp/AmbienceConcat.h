@@ -27,8 +27,11 @@ void concatenateAmbience (float* out, int n,
 //   grainLen : grain length in samples (user "Chunk Size")
 //   density  : how many grains overlap at once (>= 1; higher = smoother, hop = grainLen/density)
 //   variation: 0..1, reversal probability + position jitter to avoid audible repetition
+//   lfProf   : optional per-sample LP-500 running-RMS profile of `src` (size >= srcLen). When given,
+//              grain selection also keeps the low-frequency weight consistent across joins.
 void grainCloud (float* out, int n,
                  const float* src, int srcLen,
                  int grainLen, int density,
-                 SeededRng& rng, int antiRepeat = 12, float variation = 0.4f);
+                 SeededRng& rng, int antiRepeat = 12, float variation = 0.4f,
+                 const float* lfProf = nullptr, int lfProfLen = 0);
 } // namespace tonefill::dsp

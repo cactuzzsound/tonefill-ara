@@ -19,7 +19,7 @@ int roundUpPow2 (int v)
 
 void paulStretch (std::vector<std::vector<float>>& out, int n,
                   const std::vector<std::vector<float>>& src,
-                  int windowSize, std::uint64_t seed)
+                  int windowSize, std::uint64_t seed, double sampleRate)
 {
     const int outCh = (int) out.size();
     if (outCh <= 0 || n <= 0 || src.empty() || src[0].empty()) return;
@@ -47,6 +47,11 @@ void paulStretch (std::vector<std::vector<float>>& out, int n,
     FFTWrapper fft (W);
     SeededRng master (seed);
     const float twoPi = 6.2831853071795864f;
+    // LF phase coherence: bins below ~500 Hz carry the room's modal resonances. Independent random
+    // phase per frame makes those narrow modes "warble". Instead give each LF bin a persistent base
+    // phase that drifts VERY slowly (quasi-stationary mode) with only a touch of per-frame jitter.
+    const int   lfBin   = sampleRate > 0.0 ? std::min (bins, std::max (0, (int) (500.0 * (double) W / sampleRate))) : 0;
+    const float lfDrift = 0.012f; // rad/frame -> full turn over ~a few seconds
     // Seed also chooses WHERE in the material the slow pass begins, so Regenerate gives an audibly
     // different take (not just a different phase realisation, which sounds identical on steady tone).
     const int startOffset = (int) (SeededRng (seed ^ 0x2545F4914F6CDD1DULL).nextFloat() * (float) srcLen);
@@ -61,6 +66,9 @@ void paulStretch (std::vector<std::vector<float>>& out, int n,
         auto& o = out[(std::size_t) c];
         std::fill (o.begin(), o.end(), 0.0f);
         auto rng = master.deriveSubStream ((std::uint64_t) c);
+
+        std::vector<float> basePhaseLf ((std::size_t) std::max (1, lfBin), 0.0f);
+        for (int k = 0; k < lfBin; ++k) basePhaseLf[(std::size_t) k] = rng.nextFloat() * twoPi;
 
         for (int f = 0; f < numFrames; ++f)
         {
@@ -81,9 +89,16 @@ void paulStretch (std::vector<std::vector<float>>& out, int n,
                 float sm = 0.0f; for (int j = a; j <= b; ++j) sm += mags[(std::size_t) j];
                 sm /= (float) (b - a + 1);
 
-                // DC and Nyquist must stay real for a real signal; randomise phase elsewhere.
+                // DC and Nyquist must stay real for a real signal. LF bins get a slowly-drifting
+                // coherent phase (no modal warble); everything else gets fresh random phase.
                 if (k == 0 || k == bins - 1) { reOut[(std::size_t) k] = sm; imOut[(std::size_t) k] = 0.0f; }
-                else { const float ph = rng.nextFloat() * twoPi; reOut[(std::size_t) k] = sm * std::cos (ph); imOut[(std::size_t) k] = sm * std::sin (ph); }
+                else
+                {
+                    float ph;
+                    if (k < lfBin) { basePhaseLf[(std::size_t) k] += lfDrift; ph = basePhaseLf[(std::size_t) k] + (rng.nextFloat() - 0.5f) * 0.2f; }
+                    else           { ph = rng.nextFloat() * twoPi; }
+                    reOut[(std::size_t) k] = sm * std::cos (ph); imOut[(std::size_t) k] = sm * std::sin (ph);
+                }
             }
             fft.inverse (reOut.data(), imOut.data(), y.data());
 
