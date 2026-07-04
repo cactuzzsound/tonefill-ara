@@ -52,22 +52,35 @@ juce::AudioBuffer<float> selectCleanAmbience (const juce::AudioBuffer<float>& sr
         f.setCoefficients (juce::IIRCoefficients::makeHighPass (sr, 2000.0));
         f.processSamples (hpHi.getWritePointer (ch), len);
     }
+    // Low band (LP-500 Hz): room modes / HVAC / rumble - the primary perceptual fingerprint of the
+    // space. Tracked as a first-class band so off-LF-colour frames (passing car, door bass) are
+    // rejected by the colour cluster, and runs whose low end differs get glued harder (see An4).
+    juce::AudioBuffer<float> lp;
+    lp.makeCopyOf (src);
+    for (int ch = 0; ch < numCh; ++ch)
+    {
+        juce::IIRFilter f;
+        f.setCoefficients (juce::IIRCoefficients::makeLowPass (sr, 500.0));
+        f.processSamples (lp.getWritePointer (ch), len);
+    }
 
     const int numFrames = (len - N) / H + 1;
     std::vector<float> frameRms ((std::size_t) numFrames, 0.0f), midRms ((std::size_t) numFrames, 0.0f),
-                       hiRms ((std::size_t) numFrames, 0.0f);
+                       hiRms ((std::size_t) numFrames, 0.0f), lfRms ((std::size_t) numFrames, 0.0f);
     for (int f = 0; f < numFrames; ++f)
     {
-        float b = 0.0f, m = 0.0f, hi = 0.0f;
+        float b = 0.0f, m = 0.0f, hi = 0.0f, lo = 0.0f;
         for (int ch = 0; ch < numCh; ++ch)
         {
             b  = juce::jmax (b,  src.getRMSLevel (ch, f * H, N));
             m  = juce::jmax (m,  hp.getRMSLevel (ch, f * H, N));
             hi = juce::jmax (hi, hpHi.getRMSLevel (ch, f * H, N));
+            lo = juce::jmax (lo, lp.getRMSLevel (ch, f * H, N));
         }
         frameRms[(std::size_t) f] = b;
         midRms[(std::size_t) f]   = m;
         hiRms[(std::size_t) f]    = hi;
+        lfRms[(std::size_t) f]    = lo;
     }
 
     // Spectral tilt per frame (log band ratios). Its variation over time = spectral stationarity:
@@ -223,17 +236,19 @@ juce::AudioBuffer<float> selectCleanAmbience (const juce::AudioBuffer<float>& sr
     // room tone). Concatenating mismatched colours sounds wrong. Build a robust centre (median of
     // the spectral tilt) over the clean candidates and drop outliers; the same gate is applied to
     // the top-up so added material matches too. Tighter as Dialog Reject rises.
-    auto tiltOf = [&] (int f, float& t1, float& t2)
+    auto tiltOf = [&] (int f, float& t1, float& t2, float& t3)
     {
         const float eps = 1.0e-7f;
         const float lb = std::log (frameRms[(std::size_t) f] + eps);
         const float lm = std::log (midRms[(std::size_t) f] + eps);
         const float lh = std::log (hiRms[(std::size_t) f] + eps);
+        const float ll = std::log (lfRms[(std::size_t) f] + eps);
         t1 = lm - lb;   // energy above 300 Hz vs broadband
         t2 = lh - lm;   // energy above 2 kHz vs mid
+        t3 = ll - lb;   // energy below 500 Hz vs broadband (room-mode / low-end colour)
     };
     bool  haveCluster = false;
-    float cT1 = 0.0f, cT2 = 0.0f, sT1 = 1.0f, sT2 = 1.0f;
+    float cT1 = 0.0f, cT2 = 0.0f, cT3 = 0.0f, sT1 = 1.0f, sT2 = 1.0f, sT3 = 1.0f;
     const float clusterK = 3.5f - srj * 2.0f; // tolerance in MADs: 1.5 (srj=1) .. 3.5 (srj=0)
     {
         // Reference = the MOST-CERTAIN room tone (flat, non-speech, quietest ~40% by level),
@@ -249,10 +264,10 @@ juce::AudioBuffer<float> selectCleanAmbience (const juce::AudioBuffer<float>& sr
             std::sort (lv.begin(), lv.end());
             if (! lv.empty()) refFloor = lv[(std::size_t) (lv.size() * 3 / 10)];
         }
-        std::vector<float> T1, T2;
+        std::vector<float> T1, T2, T3;
         for (int f = 0; f < numFrames; ++f)
             if (frameRms[(std::size_t) f] <= refFloor)
-            { float a, b; tiltOf (f, a, b); T1.push_back (a); T2.push_back (b); }
+            { float a, b, c; tiltOf (f, a, b, c); T1.push_back (a); T2.push_back (b); T3.push_back (c); }
         if (T1.size() >= 8)
         {
             auto median = [] (std::vector<float> v) { std::sort (v.begin(), v.end()); return v[v.size() / 2]; };
@@ -263,16 +278,16 @@ juce::AudioBuffer<float> selectCleanAmbience (const juce::AudioBuffer<float>& sr
                 std::sort (d.begin(), d.end());
                 return juce::jmax (1.0e-3f, d[d.size() / 2]);
             };
-            cT1 = median (T1); cT2 = median (T2);
-            sT1 = mad (T1, cT1); sT2 = mad (T2, cT2);
+            cT1 = median (T1); cT2 = median (T2); cT3 = median (T3);
+            sT1 = mad (T1, cT1); sT2 = mad (T2, cT2); sT3 = mad (T3, cT3);
             haveCluster = true;
         }
     }
     auto withinCluster = [&] (int f)
     {
         if (! haveCluster) return true;
-        float a, b; tiltOf (f, a, b);
-        const float dist = 0.5f * (std::fabs (a - cT1) / sT1 + std::fabs (b - cT2) / sT2);
+        float a, b, c; tiltOf (f, a, b, c);
+        const float dist = (std::fabs (a - cT1) / sT1 + std::fabs (b - cT2) / sT2 + std::fabs (c - cT3) / sT3) / 3.0f;
         return dist <= clusterK;
     };
     if (haveCluster)
@@ -369,24 +384,29 @@ juce::AudioBuffer<float> selectCleanAmbience (const juce::AudioBuffer<float>& sr
     // previous run's tail vs the next run's head, and stretch the crossfade from 20 ms (well matched)
     // up to 120 ms (>=6 dB apart) so mismatched joins are glued harder. Runs are in frame coords, so
     // this reuses the analysis features - no extra FFT. An5: the mean mismatch is the "seam risk".
-    auto bandDbAt = [&] (int frame, float& lb, float& lm, float& lh)
+    auto bandDbAt = [&] (int frame, float& lb, float& lm, float& lh, float& ll)
     {
         const int a = juce::jlimit (0, numFrames - 1, frame - 2);
         const int b = juce::jlimit (0, numFrames - 1, frame + 2);
-        double sb = 0.0, sm = 0.0, sh = 0.0; int c = 0;
+        double sb = 0.0, sm = 0.0, sh = 0.0, sl = 0.0; int c = 0;
         for (int k = a; k <= b; ++k)
-        { sb += frameRms[(std::size_t) k]; sm += midRms[(std::size_t) k]; sh += hiRms[(std::size_t) k]; ++c; }
+        { sb += frameRms[(std::size_t) k]; sm += midRms[(std::size_t) k]; sh += hiRms[(std::size_t) k]; sl += lfRms[(std::size_t) k]; ++c; }
         const double inv = 1.0 / (double) juce::jmax (1, c);
         lb = 20.0f * std::log10 ((float) (sb * inv) + 1.0e-9f);
         lm = 20.0f * std::log10 ((float) (sm * inv) + 1.0e-9f);
         lh = 20.0f * std::log10 ((float) (sh * inv) + 1.0e-9f);
+        ll = 20.0f * std::log10 ((float) (sl * inv) + 1.0e-9f);
     };
     auto joinMismatchDb = [&] (const std::pair<int, int>& prev, const std::pair<int, int>& next)
     {
-        float pb, pm, ph, nb, nm, nh;
-        bandDbAt (prev.second - 1, pb, pm, ph);
-        bandDbAt (next.first,      nb, nm, nh);
-        return std::sqrt (((pb - nb) * (pb - nb) + (pm - nm) * (pm - nm) + (ph - nh) * (ph - nh)) / 3.0f);
+        float pb, pm, ph, pl, nb, nm, nh, nl;
+        bandDbAt (prev.second - 1, pb, pm, ph, pl);
+        bandDbAt (next.first,      nb, nm, nh, nl);
+        const float colour = std::sqrt (((pb - nb) * (pb - nb) + (pm - nm) * (pm - nm) + (ph - nh) * (ph - nh)) / 3.0f);
+        // Low end matters most perceptually: a pure <500 Hz shift reads as "different room". Weight
+        // it 2x so even an LF-only mismatch stretches the crossfade to the max (3 dB LF -> 120 ms).
+        const float lfDb = std::fabs (pl - nl);
+        return juce::jmax (colour, 2.0f * lfDb);
     };
 
     const float halfPi = 1.5707963267948966f;
