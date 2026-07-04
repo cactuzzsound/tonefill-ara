@@ -13,9 +13,8 @@ namespace tonefill::dsp
 // audible repetition. Each output channel uses an independent phase stream -> natural stereo width.
 //
 //   windowSize : analysis/synthesis window in samples (bigger = smoother / more diffuse).
-//   sampleRate : used to keep bins below ~500 Hz phase-coherent (no modal warble in the low end).
 // Output is NOT level-normalised (the caller scales to the target room-tone RMS).
 void paulStretch (std::vector<std::vector<float>>& out, int n,
                   const std::vector<std::vector<float>>& src,
-                  int windowSize, std::uint64_t seed, double sampleRate);
+                  int windowSize, std::uint64_t seed);
 } // namespace tonefill::dsp

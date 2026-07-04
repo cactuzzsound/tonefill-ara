@@ -245,7 +245,7 @@ void AmbienceRenderer::renderAmbience (const model::AmbienceModel& model,
         // crosses a chunk boundary (those boundaries are the recurring hiss the user heard).
         const auto& psSrc = (! model.stableRunPerChannel.empty() && ! model.stableRunPerChannel[0].empty())
                                 ? model.stableRunPerChannel : model.cleanAudioPerChannel;
-        dsp::paulStretch (out.channels, outN, psSrc, windowSamples, settings.seed, sr);
+        dsp::paulStretch (out.channels, outN, psSrc, windowSamples, settings.seed);
 
         // HF correction: PaulStretch can add high-frequency hiss the room tone didn't have. Match
         // the output's high-band level to the SOURCE's with a high-shelf, so we remove only the
