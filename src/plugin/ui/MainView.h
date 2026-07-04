@@ -29,6 +29,8 @@ public:
     void mouseDrag (const juce::MouseEvent&) override;
     void mouseUp (const juce::MouseEvent&) override;
 
+    struct Knob { juce::Slider slider; juce::Label label; };
+
 private:
     void timerCallback() override;
     void exportWav();
@@ -36,50 +38,55 @@ private:
     void pushSelections();                 // selections_ -> SessionState (source-sample ranges)
     int  xToSample (int x) const;          // waveform x -> source sample
     float sampleToX (int sample) const;    // source sample -> waveform x
-    void drawKnobIcon (juce::Graphics&, juce::Rectangle<float> box, int icon, juce::Colour) const;
+    void drawGroupIcon (juce::Graphics&, juce::Rectangle<float> box, int icon, juce::Colour) const;
+    void openWaveformWindow();
 
     PluginProcessor& processor_;
     ToneFillLookAndFeel lnf_;
-    juce::TooltipWindow tooltip_ { this, 600 }; // shows hover help for every control
+    juce::TooltipWindow tooltip_ { this, 600 };
 
     juce::Label titleLbl_, subLbl_;
 
-    // Per-knob glyph drawn at the card's top-left (matches the reference UI).
-    enum Icon { IcSparkle, IcDialog, IcTarget, IcCross, IcShuffle, IcSine, IcWave, IcSliders, IcClock };
-    struct Knob { juce::Slider slider; juce::Label label; int icon = 0; };
     Knob threshold_, speech_, fragment_, blend_, variation_, minFill_, flatness_, gain_, length_;
 
-    // Card + value-box rectangles for the knobs, rebuilt in resized(), drawn in paint().
-    struct CardLayout { juce::Rectangle<int> card, value; int icon; };
-    std::vector<CardLayout> cards_;
+    // Value-pill rectangles for the 9 knobs, rebuilt in resized(), drawn in paint().
+    std::vector<juce::Rectangle<int>> valuePills_;
+
+    // Three group cards (Detection / Structure / Texture): background + header rects.
+    std::array<juce::Rectangle<int>, 3> groupCard_;
+    enum Gicon { GiDetect, GiStruct, GiTexture };
 
     juce::TextButton regenBtn_ { "Regenerate" }, exportBtn_ { "Export WAV" };
-    juce::TextButton autoBtn_ { "Auto" }, manualBtn_ { "Manual" }; // learn-source mode toggle
-    juce::TextButton enhanceBtn_ { "Enhance" };                    // PaulStretch resynthesis on/off
-    juce::TextButton wholeBtn_ { "Full" };                         // analyze whole item vs first 4 min
-    juce::TextButton statBtn_ { "Stat" };                          // Statistical selection vs Classic
-    juce::TextButton waveBtn_ { "Waveform" };                      // opens the large waveform window
+    juce::TextButton autoBtn_ { "Auto" }, manualBtn_ { "Manual" };       // learn-source mode
+    juce::TextButton enhanceBtn_ { "Enhance" }, wholeBtn_ { "Full" };    // processing group
+    juce::TextButton classicBtn_ { "Classic" }, expBtn_ { "Experimental" }; // selection engine
+    juce::TextButton expandBtn_ { "Expand" };                            // open large waveform window
 
-    // Loudness normalize: bake the fill to a dBFS-peak or LUFS target (disables the Output knob).
+    // Loudness normalize.
     juce::TextButton normBtn_ { "Normalize" };
     juce::Slider     normTarget_;
     juce::ComboBox   normUnit_;
     juce::Label      normReadout_;
 
+    // Rotating tip.
+    juce::Label tipLbl_;
+    std::array<juce::String, 11> tips_;
+    int tipIdx_ = 0, tipTick_ = 0;
+
     using SA  = juce::AudioProcessorValueTreeState::SliderAttachment;
     using BA  = juce::AudioProcessorValueTreeState::ButtonAttachment;
     using CBA = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
     std::unique_ptr<SA> thA_, spA_, frA_, blA_, vaA_, mfA_, flA_, gaA_, leA_, ntA_;
-    std::unique_ptr<BA>  neA_, wfA_, enA_, stA_;
+    std::unique_ptr<BA>  neA_, wfA_, enA_;
     std::unique_ptr<CBA> nuA_;
 
-    void openWaveformWindow();
     std::unique_ptr<WaveformWindow> waveWin_;
-
     std::unique_ptr<juce::FileChooser> chooser_;
+
     SessionState::WaveData wave_;
     float meterDb_ = -120.0f;
-    juce::Rectangle<int> waveArea_, waveRuler_, meterArea_;
+    juce::Rectangle<int> headerGroups_, normCard_, bottomCard_, tipCard_;
+    juce::Rectangle<int> waveArea_, waveRuler_, dataArea_, meterArea_;
 
     // Manual learn-region selection (source-sample coordinates).
     bool manualMode_ = false;
