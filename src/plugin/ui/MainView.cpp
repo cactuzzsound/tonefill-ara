@@ -141,8 +141,20 @@ MainView::MainView (PluginProcessor& processor) : processor_ (processor)
 
     normReadout_.setFont (juce::Font (12.0f));
     normReadout_.setColour (juce::Label::textColourId, LNF::purple());
-    normReadout_.setJustificationType (juce::Justification::centredRight);
+    normReadout_.setJustificationType (juce::Justification::centredLeft);
     addAndMakeVisible (normReadout_);
+
+    // Enhance-only HISS FILTER (separate panel under Texture); the switch is active only in Enhance.
+    hissBtn_.setClickingTogglesState (true);
+    hissBtn_.setTooltip ("Enhance only: a live low-pass that removes the HF hiss PaulStretch can add. "
+                         "Freq sets the corner (3-15 kHz), Q the slope.");
+    addAndMakeVisible (hissBtn_);
+    hbA_ = std::make_unique<BA> (apvts, IDs::hissFilter, hissBtn_);
+    initKnob (*this, hissFreq_, "Freq", "De-hiss corner frequency (3-15 kHz). Lower = more aggressive HF cut.", LNF::purple());
+    hissFreq_.slider.setTextValueSuffix (" Hz");
+    initKnob (*this, hissQ_, "Q", "De-hiss filter Q (slope / resonance at the corner).", LNF::purple());
+    hfrA_ = std::make_unique<SA> (apvts, IDs::hissFreq, hissFreq_.slider);
+    hqA_  = std::make_unique<SA> (apvts, IDs::hissQ,    hissQ_.slider);
 
     tips_ = {
         "Push Voice Reject up to strip breaths and mouth noise from the bed.",
@@ -225,20 +237,30 @@ void MainView::paint (juce::Graphics& g)
     g.fillAll (LNF::bg());
     const auto navy = LNF::navy();
 
-    // Logo mark + wordmark.
+    // Logo mark + wordmark (gradient navy + orange rounded squares with a diagonal swoosh).
     {
-        juce::Rectangle<float> m (16.0f, 16.0f, 34.0f, 34.0f);
-        g.setColour (navy);
-        g.fillRoundedRectangle (m.getX(), m.getY() + 2.0f, 15.0f, 19.0f, 5.0f);
-        g.setColour (LNF::accent());
-        g.fillRoundedRectangle (m.getX() + 12.0f, m.getY() + 9.0f, 15.0f, 21.0f, 5.0f);
-        g.setFont (juce::Font (23.0f, juce::Font::bold));
-        g.setColour (navy);   g.drawText ("Tone", 58, 14, 60, 26, juce::Justification::centredLeft, false);
-        const int tw = juce::Font (23.0f, juce::Font::bold).getStringWidth ("Tone");
-        g.setColour (LNF::accent()); g.drawText ("Fill", 58 + tw, 14, 60, 26, juce::Justification::centredLeft, false);
-        g.setColour (LNF::muted());
+        const float x = 16.0f, y = 12.0f;
+        juce::Rectangle<float> nav (x, y + 3.0f, 20.0f, 26.0f);
+        g.setGradientFill (juce::ColourGradient (juce::Colour (0xff2c4372), nav.getTopLeft(),
+                                                 juce::Colour (0xff13203e), nav.getBottomRight(), false));
+        g.fillRoundedRectangle (nav, 6.0f);
+        juce::Rectangle<float> org (x + 15.0f, y + 11.0f, 20.0f, 28.0f);
+        g.setGradientFill (juce::ColourGradient (juce::Colour (0xfff0a03c), org.getTopLeft(),
+                                                 juce::Colour (0xffd9791e), org.getBottomRight(), false));
+        g.fillRoundedRectangle (org, 6.0f);
+        // Diagonal light swoosh where the two shapes meet.
+        g.setColour (juce::Colours::white.withAlpha (0.55f));
+        juce::Path sw; sw.startNewSubPath (x + 13.0f, y + 30.0f); sw.lineTo (x + 26.0f, y + 12.0f);
+        g.strokePath (sw, juce::PathStrokeType (3.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+        const juce::Font wf (24.0f, juce::Font::bold);
+        g.setFont (wf);
+        g.setColour (navy);          g.drawText ("Tone", 62, (int) y, 70, 30, juce::Justification::centredLeft, false);
+        const int tw = wf.getStringWidth ("Tone");
+        g.setColour (LNF::accent()); g.drawText ("Fill", 62 + tw, (int) y, 70, 30, juce::Justification::centredLeft, false);
+        g.setColour (juce::Colour (0xff6b7a92));
         g.setFont (juce::Font (10.0f));
-        g.drawText ("ROOM TONE GENERATOR", 59, 39, 220, 12, juce::Justification::centredLeft, false);
+        g.drawText ("S E A M L E S S   R O O M   T O N E", 63, (int) y + 26, 260, 12, juce::Justification::centredLeft, false);
     }
 
     // Faint grouped backgrounds behind the three header button clusters.
@@ -321,6 +343,22 @@ void MainView::paint (juce::Graphics& g)
     {
         g.setColour (LNF::panel());  g.fillRoundedRectangle (normCard_.toFloat(), 12.0f);
         g.setColour (LNF::line());   g.drawRoundedRectangle (normCard_.toFloat(), 12.0f, 1.0f);
+    }
+
+    // Hiss filter card (separate panel under Texture). Title dims when Enhance is off.
+    {
+        const bool enh = processor_.parameters().apvts.getRawParameterValue (IDs::paulStretch)->load() > 0.5f;
+        g.setColour (LNF::panel());  g.fillRoundedRectangle (hissCard_.toFloat(), 12.0f);
+        g.setColour (LNF::line());   g.drawRoundedRectangle (hissCard_.toFloat(), 12.0f, 1.0f);
+        g.setColour (enh ? LNF::coral() : LNF::muted());
+        g.setFont (juce::Font (11.0f, juce::Font::bold));
+        g.drawText ("HISS FILTER", hissCard_.getX() + 14, hissCard_.getY() + 6, 140, 12, juce::Justification::centredLeft, false);
+        if (! enh)
+        {
+            g.setColour (LNF::muted());
+            g.setFont (juce::Font (10.0f));
+            g.drawText ("Enhance only", hissCard_.getRight() - 96, hissCard_.getY() + 6, 82, 12, juce::Justification::centredRight, false);
+        }
     }
 
     // Tip card.
@@ -465,16 +503,33 @@ void MainView::resized()
     }
     r.removeFromTop (12);
 
-    // Normalize card.
-    normCard_ = r.removeFromTop (52);
+    // Normalize + Hiss row: Normalize ends flush with the Structure card's right edge; the Hiss
+    // panel starts flush with the Texture card's left edge (the gap between them separates them).
+    auto normRow = r.removeFromTop (60);
+    normCard_ = normRow.withRight (groupCard_[1].getRight());
+    hissCard_ = normRow.withLeft (groupCard_[2].getX());
     {
         auto nr = normCard_.reduced (14, 0);
-        normBtn_.setBounds (nr.removeFromLeft (110).withSizeKeepingCentre (110, 28));
-        nr.removeFromLeft (16);
-        normTarget_.setBounds (nr.removeFromLeft (150).withSizeKeepingCentre (150, 28));
-        nr.removeFromLeft (12);
-        normUnit_.setBounds (nr.removeFromLeft (84).withSizeKeepingCentre (84, 28));
-        normReadout_.setBounds (nr.removeFromRight (200).withSizeKeepingCentre (200, 24));
+        normBtn_.setBounds (nr.removeFromLeft (100).withSizeKeepingCentre (100, 28));
+        nr.removeFromLeft (10);
+        normTarget_.setBounds (nr.removeFromLeft (124).withSizeKeepingCentre (124, 28));
+        nr.removeFromLeft (10);
+        normUnit_.setBounds (nr.removeFromLeft (72).withSizeKeepingCentre (72, 28));
+        nr.removeFromLeft (10);
+        normReadout_.setBounds (nr.withSizeKeepingCentre (nr.getWidth(), 24)); // "now" next to the unit picker
+    }
+    {
+        auto hr = hissCard_.reduced (12, 6).withTrimmedTop (12); // leave room for the HISS FILTER title
+        hissBtn_.setBounds (hr.removeFromLeft (96).withSizeKeepingCentre (96, 26));
+        hr.removeFromLeft (8);
+        auto placeMini = [] (Knob& k, juce::Rectangle<int> cell)
+        {
+            k.label.setBounds (cell.removeFromTop (11));
+            k.slider.setBounds (cell);
+        };
+        const int kw = hr.getWidth() / 2;
+        placeMini (hissFreq_, hr.removeFromLeft (kw));
+        placeMini (hissQ_, hr);
     }
     r.removeFromTop (12);
 
@@ -525,6 +580,20 @@ void MainView::timerCallback()
     ss.normalizeTarget.store (apvts.getRawParameterValue (IDs::normTarget)->load());
     ss.normalizeLufs.store (normLufs);
     ss.wholeFile.store (apvts.getRawParameterValue (IDs::wholeFile)->load() > 0.5f);
+
+    // Hiss filter is live (audio thread) - mirror WITHOUT bumping generation. Active only in Enhance.
+    const bool enh    = apvts.getRawParameterValue (IDs::paulStretch)->load() > 0.5f;
+    const bool hissOn = apvts.getRawParameterValue (IDs::hissFilter)->load() > 0.5f;
+    ss.hissFilter.store (hissOn);
+    ss.hissFreq.store (apvts.getRawParameterValue (IDs::hissFreq)->load());
+    ss.hissQ.store (apvts.getRawParameterValue (IDs::hissQ)->load());
+    hissBtn_.setEnabled (enh);
+    hissFreq_.slider.setEnabled (enh && hissOn); hissFreq_.label.setEnabled (enh && hissOn);
+    hissQ_.slider.setEnabled (enh && hissOn);    hissQ_.label.setEnabled (enh && hissOn);
+    const float hissA = enh ? 1.0f : 0.4f;
+    hissBtn_.setAlpha (hissA);
+    hissFreq_.slider.setAlpha (enh && hissOn ? 1.0f : 0.4f); hissFreq_.label.setAlpha (hissA);
+    hissQ_.slider.setAlpha (enh && hissOn ? 1.0f : 0.4f);    hissQ_.label.setAlpha (hissA);
 
     const bool stat = apvts.getRawParameterValue (IDs::statistical)->load() > 0.5f;
     ss.statisticalMode.store (stat);

@@ -49,6 +49,13 @@ APVTS::ParameterLayout ParameterState::createLayout()
     layout.add (std::make_unique<AudioParameterFloat> (ParameterID { IDs::renderLength, 1 }, "Export Len",
         NormalisableRange<float> (0.5f, 30.0f, 0.1f), 5.0f));
 
+    // Enhance-only live HF de-hiss (applied on the audio thread, tweakable in real time).
+    layout.add (std::make_unique<juce::AudioParameterBool> (ParameterID { IDs::hissFilter, 1 }, "Hiss Filter", false));
+    layout.add (std::make_unique<AudioParameterFloat> (ParameterID { IDs::hissFreq, 1 }, "Hiss Freq",
+        NormalisableRange<float> (3000.0f, 15000.0f, 1.0f, 0.5f), 9000.0f));
+    layout.add (std::make_unique<AudioParameterFloat> (ParameterID { IDs::hissQ, 1 }, "Hiss Q",
+        NormalisableRange<float> (0.3f, 2.0f, 0.01f), 0.707f));
+
     return layout;
 }
 } // namespace tonefill::plugin

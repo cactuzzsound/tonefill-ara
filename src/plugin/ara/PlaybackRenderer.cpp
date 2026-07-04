@@ -498,6 +498,24 @@ bool ToneFillPlaybackRenderer::processBlock (juce::AudioBuffer<float>& buffer,
         }
     }
 
+    // Enhance-only HISS FILTER: a live low-pass that removes the HF hiss PaulStretch adds. Only when
+    // Enhance AND Hiss Filter are on. Coefficients are rebuilt only when the knobs move.
+    if (state_ != nullptr && state_->hissFilter.load() && state_->paulStretch.load())
+    {
+        const int nCh = buffer.getNumChannels();
+        if ((int) hissFilters_.size() < nCh) hissFilters_.resize ((std::size_t) nCh);
+        const float freq = juce::jlimit (3000.0f, 15000.0f, state_->hissFreq.load());
+        const float q    = juce::jlimit (0.3f, 2.0f, state_->hissQ.load());
+        if (std::abs (freq - hissLastFreq_) > 0.5f || std::abs (q - hissLastQ_) > 1.0e-3f)
+        {
+            const auto co = juce::IIRCoefficients::makeLowPass (sampleRate, freq, q);
+            for (auto& f : hissFilters_) f.setCoefficients (co);
+            hissLastFreq_ = freq; hissLastQ_ = q;
+        }
+        for (int ch = 0; ch < nCh; ++ch)
+            hissFilters_[(std::size_t) ch].processSamples (buffer.getWritePointer (ch), numSamples);
+    }
+
     // Output gain + meter. When Normalize is on the fill is already baked to target, so the
     // live manual gain is bypassed (unity).
     const float gain = (state_ != nullptr && ! state_->normalizeEnabled.load())

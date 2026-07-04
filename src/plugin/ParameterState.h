@@ -40,6 +40,9 @@ public:
         static constexpr auto statistical    = "statistical";    // Statistical selection (Design §E) vs Classic
         static constexpr auto learnMode      = "learnMode";      // AudioSuite: learn from selection vs generate
         static constexpr auto renderLength   = "renderLength";   // Export WAV length, seconds
+        static constexpr auto hissFilter     = "hissFilter";     // Enhance-only live HF de-hiss on/off
+        static constexpr auto hissFreq       = "hissFreq";       // de-hiss corner frequency (Hz)
+        static constexpr auto hissQ          = "hissQ";          // de-hiss filter Q
         // seed is plain processor state (not automatable), not an APVTS parameter.
     };
 

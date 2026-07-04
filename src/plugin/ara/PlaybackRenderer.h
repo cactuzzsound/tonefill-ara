@@ -79,6 +79,11 @@ private:
     std::atomic<bool>               analysisStarted { false };
     std::unique_ptr<FillWorker>     worker;
 
+    // Enhance-only live HF de-hiss: per-channel low-pass applied on the audio thread. Coeffs are
+    // rebuilt only when the freq/Q knobs move (cheap; not per sample).
+    std::vector<juce::IIRFilter> hissFilters_;
+    float hissLastFreq_ = -1.0f, hissLastQ_ = -1.0f;
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ToneFillPlaybackRenderer)
 };
 } // namespace tonefill::plugin::ara
