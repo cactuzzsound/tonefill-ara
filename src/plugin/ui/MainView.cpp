@@ -3,6 +3,7 @@
 #include "plugin/PluginProcessor.h"
 #include "plugin/ParameterState.h"
 #include "dsp/Loudness.h"
+#include "BinaryData.h"
 
 #include <juce_audio_formats/juce_audio_formats.h>
 
@@ -237,30 +238,17 @@ void MainView::paint (juce::Graphics& g)
     g.fillAll (LNF::bg());
     const auto navy = LNF::navy();
 
-    // Logo mark + wordmark (gradient navy + orange rounded squares with a diagonal swoosh).
+    // Logo (embedded PNG, trimmed to its content bounding box so the transparent margins don't
+    // waste header space), scaled to fit preserving aspect.
     {
-        const float x = 16.0f, y = 12.0f;
-        juce::Rectangle<float> nav (x, y + 3.0f, 20.0f, 26.0f);
-        g.setGradientFill (juce::ColourGradient (juce::Colour (0xff2c4372), nav.getTopLeft(),
-                                                 juce::Colour (0xff13203e), nav.getBottomRight(), false));
-        g.fillRoundedRectangle (nav, 6.0f);
-        juce::Rectangle<float> org (x + 15.0f, y + 11.0f, 20.0f, 28.0f);
-        g.setGradientFill (juce::ColourGradient (juce::Colour (0xfff0a03c), org.getTopLeft(),
-                                                 juce::Colour (0xffd9791e), org.getBottomRight(), false));
-        g.fillRoundedRectangle (org, 6.0f);
-        // Diagonal light swoosh where the two shapes meet.
-        g.setColour (juce::Colours::white.withAlpha (0.55f));
-        juce::Path sw; sw.startNewSubPath (x + 13.0f, y + 30.0f); sw.lineTo (x + 26.0f, y + 12.0f);
-        g.strokePath (sw, juce::PathStrokeType (3.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-
-        const juce::Font wf (24.0f, juce::Font::bold);
-        g.setFont (wf);
-        g.setColour (navy);          g.drawText ("Tone", 62, (int) y, 70, 30, juce::Justification::centredLeft, false);
-        const int tw = wf.getStringWidth ("Tone");
-        g.setColour (LNF::accent()); g.drawText ("Fill", 62 + tw, (int) y, 70, 30, juce::Justification::centredLeft, false);
-        g.setColour (juce::Colour (0xff6b7a92));
-        g.setFont (juce::Font (10.0f));
-        g.drawText ("S E A M L E S S   R O O M   T O N E", 63, (int) y + 26, 260, 12, juce::Justification::centredLeft, false);
+        static const juce::Image logo = []
+        {
+            auto full = juce::ImageCache::getFromMemory (BinaryData::tonefilllogo_png, BinaryData::tonefilllogo_pngSize);
+            return (full.isValid() && full.getWidth() >= 1652) ? full.getClippedImage ({ 331, 462, 1321, 280 }) : full;
+        }();
+        if (logo.isValid())
+            g.drawImageWithin (logo, 16, 10, 264, 42,
+                               juce::RectanglePlacement::xLeft | juce::RectanglePlacement::yMid, false);
     }
 
     // Faint grouped backgrounds behind the three header button clusters.
