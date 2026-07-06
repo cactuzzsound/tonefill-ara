@@ -52,9 +52,9 @@ endif()
 
 juce_add_plugin(ToneFillPlugin
     PRODUCT_NAME             "ToneFill"
-    COMPANY_NAME             "Cactuzz Sound"
+    COMPANY_NAME             "cactuzz sound"   # MUST match LostComzz (same vendor in Logic)
     BUNDLE_ID                com.cactuzzsound.tonefill
-    PLUGIN_MANUFACTURER_CODE Catz
+    PLUGIN_MANUFACTURER_CODE Czsd              # same manufacturer code as LostComzz
     PLUGIN_CODE              Tfil
     FORMATS                  VST3 AU   # AAX is the native HostProcessor build under aax/ (not JUCE)
     ${_tonefill_ara_kw}                       # IS_ARA_EFFECT TRUE, or nothing

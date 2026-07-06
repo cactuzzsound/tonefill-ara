@@ -7,3 +7,6 @@ compile_commands.json
 
 # external dependencies (JUCE via -DJUCE_DIR, ARA SDK cloned)
 external/
+
+# Signed installer output
+dist/
