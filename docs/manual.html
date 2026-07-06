@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ToneFill — User Manual</title>
+<style>
+  :root{
+    --cream:#f6f4ef; --panel:#ffffff; --ink:#22305a; --navy:#22305a; --panelHi:#f4f2ec;
+    --line:#e7e3db; --lineSoft:#ece8e0; --orange:#e28e2b; --purple:#6e5fb3; --coral:#e2603e;
+    --muted:#9a9585; --label:#7a7d86; --slate:#6b7a92; --good:#3e8e5a;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--cream);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+    line-height:1.65;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:920px;margin:0 auto;padding:40px 24px 80px}
+  header.top{display:flex;align-items:center;gap:16px;margin-bottom:8px}
+  .mark{flex:none}
+  .word{font-size:34px;font-weight:700;letter-spacing:-.5px;line-height:1}
+  .word .o{color:var(--orange)}
+  .tag{font-size:11px;letter-spacing:4px;color:var(--slate);margin-top:6px}
+  .lede{color:#4a4d55;font-size:16px;margin:18px 0 30px;max-width:70ch}
+  h2{font-size:13px;letter-spacing:2px;color:var(--label);font-weight:700;text-transform:uppercase;
+    margin:38px 0 14px;display:flex;align-items:center;gap:9px}
+  h2 .dot{width:8px;height:8px;border-radius:2px;display:inline-block}
+  h3{font-size:17px;font-weight:600;margin:0 0 4px;color:var(--navy)}
+  p{margin:0 0 12px}
+  a{color:var(--purple);text-decoration:none} a:hover{text-decoration:underline}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px 22px;margin:14px 0}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:680px){.grid{grid-template-columns:1fr}.word{font-size:28px}}
+  .ctl{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  .ctl .name{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px}
+  .ctl .name b{font-size:15px;font-weight:600}
+  .pill{font-size:11px;font-weight:600;padding:3px 9px;border-radius:20px;white-space:nowrap}
+  .pill.o{background:#faecd9;color:#8a5410}
+  .pill.p{background:#eeedfb;color:#463a89}
+  .ctl p{font-size:13.5px;color:#55585f;margin:0}
+  .range{font-size:12px;color:var(--muted);margin-top:8px}
+  .steps{counter-reset:s;list-style:none;padding:0;margin:0}
+  .steps li{counter-increment:s;position:relative;padding:6px 0 6px 40px;margin:0}
+  .steps li::before{content:counter(s);position:absolute;left:0;top:6px;width:26px;height:26px;
+    background:var(--navy);color:#fff;border-radius:50%;display:flex;align-items:center;justify-content:center;
+    font-size:13px;font-weight:600}
+  .chip{display:inline-block;background:var(--navy);color:#fff;border-radius:8px;padding:3px 10px;
+    font-size:12.5px;font-weight:500;margin:0 2px}
+  .chip.coral{background:var(--coral)} .chip.ghost{background:transparent;color:var(--navy);border:1px solid var(--line)}
+  .note{border-left:0;background:var(--panelHi);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin:14px 0}
+  .note b{color:var(--coral)}
+  table.kv{width:100%;border-collapse:collapse;font-size:13.5px}
+  table.kv td{padding:7px 0;border-bottom:1px solid var(--lineSoft);vertical-align:top}
+  table.kv td:first-child{color:var(--label);width:34%;padding-right:14px}
+  footer{margin-top:50px;padding-top:18px;border-top:1px solid var(--line);color:var(--muted);font-size:12.5px;
+    display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px}
+  .status{font-size:12.5px;color:var(--navy);background:var(--panelHi);border:1px solid var(--line);
+    border-radius:8px;padding:8px 12px;display:inline-block;margin-top:4px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <svg class="mark" width="58" height="52" viewBox="0 0 58 52" aria-hidden="true">
+      <defs>
+        <linearGradient id="n" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="#2c4372"/><stop offset="1" stop-color="#13203e"/></linearGradient>
+        <linearGradient id="o" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="#f0a03c"/><stop offset="1" stop-color="#d9791e"/></linearGradient>
+      </defs>
+      <rect x="4" y="6" width="26" height="34" rx="8" fill="url(#n)"/>
+      <rect x="24" y="14" width="26" height="36" rx="8" fill="url(#o)"/>
+      <path d="M22 40 L36 16" stroke="#fff" stroke-opacity="0.55" stroke-width="4" stroke-linecap="round"/>
+    </svg>
+    <div>
+      <div class="word">Tone<span class="o">Fill</span></div>
+      <div class="tag">S E A M L E S S &nbsp; R O O M &nbsp; T O N E</div>
+    </div>
+  </header>
+
+  <p class="lede">ToneFill generates seamless dialogue room tone. It listens to a production clip,
+  finds the cleanest, steadiest background ambience, and rebuilds it into a continuous bed you can
+  stretch under any edit — no loop points, no audible joins. VST3 (with ARA) and Audio Unit for
+  Logic Pro X.</p>
+
+  <h2><span class="dot" style="background:var(--navy)"></span>Quick start</h2>
+  <div class="card">
+    <ol class="steps">
+      <li>Drop ToneFill on a dialogue clip (ARA) or region. Analysis runs automatically off the audio thread.</li>
+      <li>Leave <span class="chip ghost">Auto</span> on — the waveform lights the clean ambience it found in <b style="color:var(--orange)">orange</b>.</li>
+      <li>Play back: the gaps and the whole region are filled with matched room tone.</li>
+      <li>Not clean enough? Raise <span class="chip">Voice Reject</span> and lower <span class="chip">Clean Level</span>.</li>
+      <li>Set <span class="chip">Export Len</span> and hit <span class="chip coral">Export WAV</span> for a standalone file.</li>
+    </ol>
+  </div>
+
+  <h2><span class="dot" style="background:var(--orange)"></span>Detection — what counts as room tone</h2>
+  <div class="grid">
+    <div class="ctl"><div class="name"><b>Clean Level</b><span class="pill o">Auto</span></div>
+      <p>How quiet a moment must be to count as room tone. Lower = stricter — rejects claps, clicks and loud bits more aggressively.</p></div>
+    <div class="ctl"><div class="name"><b>Voice Reject</b><span class="pill o">Auto</span></div>
+      <p>How hard to exclude voice, breaths and mouth noise. Higher = cleaner tone. Push it up and keep Clean Level low for dialogue-heavy takes.</p></div>
+    <div class="ctl"><div class="name"><b>Min Fill</b><span class="pill o">Auto</span></div>
+      <p>Minimum length a stable fragment must have to be used. Longer = fewer, more consistent chunks and fewer audible joins.<span class="range">Range 0.2 – 5.0 s</span></p></div>
+  </div>
+
+  <h2><span class="dot" style="background:var(--purple)"></span>Structure — how the bed is assembled</h2>
+  <div class="grid">
+    <div class="ctl"><div class="name"><b>Flatness</b><span class="pill p">Selection</span></div>
+      <p>How strict the stationarity requirement is. Higher = only very steady stretches, so the fill avoids audible jumps and level swings.</p></div>
+    <div class="ctl"><div class="name"><b>Chunk Size</b><span class="pill p">Bed</span></div>
+      <p>Length of each real chunk taken from the source. Longer = more natural texture; shorter = smoother but more repetitive.</p></div>
+    <div class="ctl"><div class="name"><b>Crossfade</b><span class="pill p">Bed</span></div>
+      <p>How much neighbouring chunks overlap and blend. Higher = smoother joins. Joins are also widened automatically when two chunks differ in the low end.</p></div>
+  </div>
+
+  <h2><span class="dot" style="background:var(--purple)"></span>Texture — output shaping</h2>
+  <div class="grid">
+    <div class="ctl"><div class="name"><b>Smoothness</b><span class="pill p">Enhance</span></div>
+      <p>Enhance only: resynthesis window size. Higher = smoother, more diffuse; lower keeps more of the source's fine texture.</p></div>
+    <div class="ctl"><div class="name"><b>Output</b><span class="pill o">Level</span></div>
+      <p>Output volume in dB. Bypassed while Normalize is on.<span class="range">Range −24 – +24 dB</span></p></div>
+    <div class="ctl"><div class="name"><b>Export Len</b><span class="pill p">Export</span></div>
+      <p>Length of the WAV written by Export. The seamless loop is tiled to exactly this length.<span class="range">Range 0.5 – 30 s</span></p></div>
+  </div>
+
+  <h2><span class="dot" style="background:var(--navy)"></span>Mode switches</h2>
+  <div class="card">
+    <table class="kv">
+      <tr><td><span class="chip ghost">Auto</span> / <span class="chip">Manual</span></td>
+        <td><b>Auto</b> finds clean room tone for you. <b>Manual</b> lets you drag your own regions on the waveform below — drag to add, click a region to remove.</td></tr>
+      <tr><td><span class="chip">Enhance</span> / <span class="chip ghost">Full</span></td>
+        <td><b>Enhance</b> turns on PaulStretch resynthesis for when the real fragments won't blend into a clean bed (enables Smoothness and the Hiss Filter). <b>Full</b> analyses the whole take instead of the first 4 minutes — use it when clean tone is scattered across a long clip.</td></tr>
+      <tr><td><span class="chip ghost">Classic</span> / <span class="chip">Experimental</span></td>
+        <td><b>Classic</b> is the tuned selection engine (default). <b>Experimental</b> scores every frame with a weighted model — A/B it against Classic by ear; if it doesn't win, switch back.</td></tr>
+    </table>
+  </div>
+
+  <h2><span class="dot" style="background:var(--coral)"></span>Hiss Filter <span style="color:var(--muted);letter-spacing:0;text-transform:none;font-weight:400;font-size:12px">(Enhance only)</span></h2>
+  <div class="card">
+    <p>Enhance can add a faint high-frequency hiss as it resynthesises the bed. The Hiss Filter is a
+    live low-pass — applied in real time, so you hear the change instantly with no re-render.</p>
+    <div class="grid" style="margin-top:6px">
+      <div class="ctl"><div class="name"><b>Freq</b><span class="pill p">3–15 kHz</span></div>
+        <p>The corner frequency. Lower = more aggressive HF removal. Start around 9 kHz and pull down until the hiss goes.</p></div>
+      <div class="ctl"><div class="name"><b>Q</b><span class="pill p">0.3–2.0</span></div>
+        <p>The slope / resonance at the corner. Around 0.7 is a clean, gentle roll-off; higher tightens the knee.</p></div>
+    </div>
+    <div class="note" style="margin-top:14px"><b>Tip.</b> The switch is only active while Enhance is on — with Enhance off, the real-audio bed already keeps the source's high end.</div>
+  </div>
+
+  <h2><span class="dot" style="background:var(--purple)"></span>Loudness — Normalize</h2>
+  <div class="card">
+    <p>Turn <span class="chip">Normalize</span> on to bake the output to a fixed loudness target. Pick
+    <b>LUFS</b> (integrated, EBU R128) or <b>dBFS</b> (peak), set the target with the − / + stepper, and the
+    <b>now</b> readout shows the measured value. While Normalize is on, the Output knob is bypassed and
+    the exported WAV is corrected to hit the target precisely at your chosen length.</p>
+  </div>
+
+  <h2><span class="dot" style="background:var(--navy)"></span>Waveform &amp; readouts</h2>
+  <div class="card">
+    <p>The bottom panel shows the whole analysed clip. <b style="color:var(--orange)">Orange</b> bars are the
+    ambience ToneFill selected; grey is rejected. In Manual mode, drag across the waveform to add
+    room-tone regions and click one to remove it. <span class="chip ghost">Expand</span> opens a large
+    window with a timecode ruler, zoom and scroll for precise selecting.</p>
+    <p style="margin-top:10px">The status line reads:</p>
+    <span class="status">used 25.1 s (7 chunks) &nbsp;·&nbsp; avail 83.9 s &nbsp;·&nbsp; seam 1.9 dB &nbsp;·&nbsp; in −66 dB</span>
+    <table class="kv" style="margin-top:14px">
+      <tr><td>used</td><td>total clean material actually used after the Min Fill filter, and how many chunks.</td></tr>
+      <tr><td>avail</td><td>total clean material found before Min Fill — if this is high but <i>used</i> is low, lower Min Fill.</td></tr>
+      <tr><td>seam</td><td>average spectral mismatch across chunk joins (dB). A ⚠ over 4 dB means raise Min Fill or tighten the selection.</td></tr>
+      <tr><td>in</td><td>the analysed source level.</td></tr>
+    </table>
+  </div>
+
+  <h2><span class="dot" style="background:var(--navy)"></span>Actions</h2>
+  <div class="card">
+    <p><span class="chip ghost">Regenerate</span> rolls a new random variation of the fill with the same
+    settings — handy if a particular realisation repeats audibly. <span class="chip coral">Export WAV</span>
+    writes the fill to a 24-bit WAV, tiled seamlessly to <b>Export Len</b> (loudness-corrected when Normalize is on).</p>
+  </div>
+
+  <h2><span class="dot" style="background:var(--orange)"></span>Working the low end</h2>
+  <div class="card">
+    <p>Room tone lives or dies below 500 Hz — that's where the ear hears a "different room". ToneFill
+    treats the low band as a first-class part of the room's colour: chunks with a mismatched low end
+    are rejected during selection, and joins between chunks that differ in the low end are crossfaded
+    harder. If a fill still feels like it shifts weight at a cut, raise <b>Min Fill</b> and <b>Flatness</b>.</p>
+  </div>
+
+  <h2><span class="dot" style="background:var(--navy)"></span>Formats &amp; install</h2>
+  <div class="card">
+    <table class="kv">
+      <tr><td>VST3 (with ARA)</td><td><code>~/Library/Audio/Plug-Ins/VST3/ToneFill.vst3</code> — Reaper, Cubase, Studio One, Pro Tools (ARA).</td></tr>
+      <tr><td>Audio Unit</td><td><code>~/Library/Audio/Plug-Ins/Components/ToneFill.component</code> — Logic Pro X, GarageBand.</td></tr>
+      <tr><td>Installer</td><td>Signed <code>.pkg</code> installs both, system-wide, into <code>/Library/Audio/Plug-Ins</code>.</td></tr>
+      <tr><td>Manufacturer</td><td>cactuzz sound</td></tr>
+    </table>
+  </div>
+
+  <footer>
+    <span>ToneFill — Seamless Room Tone · © cactuzz sound</span>
+    <span>v1.0.0</span>
+  </footer>
+
+</div>
+</body>
+</html>
