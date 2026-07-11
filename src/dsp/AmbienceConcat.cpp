@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <deque>
+#include <vector>
 
 namespace tonefill::dsp
 {
