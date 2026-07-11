@@ -14,7 +14,7 @@ on:
 
 jobs:
   build:
-    runs-on: windows-latest
+    runs-on: windows-2022   # has VS 2022 pre-installed and discoverable by the CMake VS generator
 
     env:
       # Pins matching the working macOS build. Bump together with the local checkout.
