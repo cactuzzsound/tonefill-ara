@@ -12,6 +12,9 @@ on:
   push:
     tags: ["v*"]
 
+permissions:
+  contents: write   # softprops/action-gh-release creates/updates the release on tag builds
+
 jobs:
   build:
     runs-on: windows-2022   # has VS 2022 pre-installed and discoverable by the CMake VS generator
