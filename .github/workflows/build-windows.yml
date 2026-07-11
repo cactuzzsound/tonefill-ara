@@ -48,8 +48,9 @@ jobs:
         shell: bash
         run: |
           set -e
+          # The ARA_SDK superproject commit is irrelevant here (we replace its ARA_API / ARA_Library
+          # submodule dirs with pinned clones below); the default clone just gives the folder layout.
           git clone https://github.com/Celemony/ARA_SDK.git external/ARA_SDK
-          git -C external/ARA_SDK checkout "$ARA_SDK_COMMIT"
           rm -rf external/ARA_SDK/ARA_API external/ARA_SDK/ARA_Library
           git clone https://github.com/Celemony/ARA_API.git external/ARA_SDK/ARA_API
           git -C external/ARA_SDK/ARA_API checkout "$ARA_API_COMMIT"
