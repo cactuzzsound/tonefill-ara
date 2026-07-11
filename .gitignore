@@ -10,3 +10,7 @@ external/
 
 # Signed installer output
 dist/
+
+# Windows installer build outputs
+installer/windows/stage/
+installer/windows/Output/

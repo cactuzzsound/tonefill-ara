@@ -1,0 +1,115 @@
+name: Build ToneFill - Windows
+
+# Builds the Windows VST3 (ARA-enabled) with CMake, then packages a signed-by-Inno installer .exe.
+# Trigger manually, or automatically on a version tag (v1.0.0, ...).
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Installer version (e.g. 1.0.0)"
+        required: false
+        default: "1.0.0"
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    env:
+      # Pins matching the working macOS build. Bump together with the local checkout.
+      JUCE_TAG: "8.0.12"
+      ARA_SDK_COMMIT: "1ca0b0a"
+      LIBFVAD_COMMIT: "532ab66"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: ver
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "value=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=${{ github.event.inputs.version || '1.0.0' }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ── Dependencies (gitignored external/; fetched fresh, pinned) ──────────────
+      - name: Clone JUCE ${{ env.JUCE_TAG }}
+        run: git clone --branch ${{ env.JUCE_TAG }} --depth 1 https://github.com/juce-framework/JUCE.git C:/JUCE
+
+      - name: Clone ARA SDK
+        run: |
+          git clone https://github.com/Celemony/ARA_SDK.git external/ARA_SDK
+          git -C external/ARA_SDK checkout ${{ env.ARA_SDK_COMMIT }}
+          git -C external/ARA_SDK submodule update --init --recursive
+
+      - name: Clone libfvad
+        run: |
+          git clone https://github.com/dpirch/libfvad.git external/libfvad
+          git -C external/libfvad checkout ${{ env.LIBFVAD_COMMIT }}
+
+      # ── Configure + build (VST3 only; AU is macOS-only, AAX self-guards off) ────
+      - name: Configure (CMake, VS 2022 x64, ARA on)
+        run: >
+          cmake -B build -G "Visual Studio 17 2022" -A x64
+          -DJUCE_DIR=C:/JUCE
+          -DTONEFILL_ENABLE_ARA=ON
+          -DTONEFILL_ARA_SDK_DIR=${{ github.workspace }}/external/ARA_SDK
+          -DTONEFILL_BUILD_TESTS=OFF
+          -DTONEFILL_BUILD_TOOLS=OFF
+
+      - name: Build VST3 (Release)
+        run: cmake --build build --config Release --target ToneFillPlugin_VST3 --parallel
+
+      # ── Stage the built bundle where the Inno script expects it ─────────────────
+      - name: Stage VST3 + manual
+        shell: pwsh
+        run: |
+          $vst3 = Get-ChildItem -Path build -Recurse -Directory -Filter "ToneFill.vst3" |
+                  Where-Object { $_.FullName -match "VST3" } | Select-Object -First 1
+          if (-not $vst3) { throw "ToneFill.vst3 not found under build/" }
+          Write-Host "Found: $($vst3.FullName)"
+          New-Item -ItemType Directory -Force -Path installer\windows\stage | Out-Null
+          Copy-Item -Recurse -Force $vst3.FullName installer\windows\stage\ToneFill.vst3
+          Copy-Item -Force docs\manual.html installer\windows\stage\manual.html
+
+      # ── Inno Setup installer ────────────────────────────────────────────────────
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Compile installer
+        shell: pwsh
+        run: |
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          & $iscc "/DAppVersion=${{ steps.ver.outputs.value }}" "installer\windows\ToneFill.iss"
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed ($LASTEXITCODE)" }
+
+      - name: Also produce a plain ZIP of the VST3
+        shell: pwsh
+        run: |
+          Compress-Archive -Path installer\windows\stage\ToneFill.vst3 `
+            -DestinationPath "installer\windows\Output\ToneFill-${{ steps.ver.outputs.value }}-Windows-VST3.zip" -Force
+
+      # ── Upload ──────────────────────────────────────────────────────────────────
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: ToneFill-Windows-Installer
+          path: installer/windows/Output/ToneFill-*-Windows.exe
+
+      - name: Upload VST3 ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: ToneFill-Windows-VST3
+          path: installer/windows/Output/ToneFill-*-Windows-VST3.zip
+
+      - name: Attach to release (tag builds only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            installer/windows/Output/ToneFill-*-Windows.exe
+            installer/windows/Output/ToneFill-*-Windows-VST3.zip
