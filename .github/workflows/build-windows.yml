@@ -48,14 +48,21 @@ jobs:
         shell: bash
         run: |
           set -e
-          # The ARA_SDK superproject commit is irrelevant here (we replace its ARA_API / ARA_Library
-          # submodule dirs with pinned clones below); the default clone just gives the folder layout.
+          # The ARA_SDK superproject commit is irrelevant (we replace its ARA_API / ARA_Library
+          # submodule dirs). The pinned submodule commits are release-branch commits not on the
+          # default branch, so fetch them by SHA directly (GitHub allows fetch-by-SHA).
           git clone https://github.com/Celemony/ARA_SDK.git external/ARA_SDK
           rm -rf external/ARA_SDK/ARA_API external/ARA_SDK/ARA_Library
-          git clone https://github.com/Celemony/ARA_API.git external/ARA_SDK/ARA_API
-          git -C external/ARA_SDK/ARA_API checkout "$ARA_API_COMMIT"
-          git clone https://github.com/Celemony/ARA_Library.git external/ARA_SDK/ARA_Library
-          git -C external/ARA_SDK/ARA_Library checkout "$ARA_LIBRARY_COMMIT"
+          fetch_sha() {
+            local dir="$1" url="$2" sha="$3"
+            mkdir -p "$dir"
+            git -C "$dir" init -q
+            git -C "$dir" remote add origin "$url"
+            git -C "$dir" fetch -q --depth 1 origin "$sha"
+            git -C "$dir" checkout -q FETCH_HEAD
+          }
+          fetch_sha external/ARA_SDK/ARA_API     https://github.com/Celemony/ARA_API.git     "$ARA_API_COMMIT"
+          fetch_sha external/ARA_SDK/ARA_Library https://github.com/Celemony/ARA_Library.git "$ARA_LIBRARY_COMMIT"
           test -f external/ARA_SDK/ARA_Library/Utilities/ARAChannelArrangement.cpp
 
       - name: Clone libfvad
