@@ -20,6 +20,10 @@ jobs:
       # Pins matching the working macOS build. Bump together with the local checkout.
       JUCE_TAG: "8.0.12"
       ARA_SDK_COMMIT: "1ca0b0a"
+      # ARA_SDK's submodules, pinned to the exact commits the local build uses (JUCE's ARA
+      # client compiles ARA_Library/Utilities/*.cpp, so ARA_Library must be populated).
+      ARA_API_COMMIT: "b0905ce4428825909cf1477b4784a6ef7acc5e0d"
+      ARA_LIBRARY_COMMIT: "063a8f6a002b081650a4ffafcb074fd894309205"
       LIBFVAD_COMMIT: "532ab66"
 
     steps:
@@ -40,11 +44,18 @@ jobs:
       - name: Clone JUCE ${{ env.JUCE_TAG }}
         run: git clone --branch ${{ env.JUCE_TAG }} --depth 1 https://github.com/juce-framework/JUCE.git C:/JUCE
 
-      - name: Clone ARA SDK
+      - name: Clone ARA SDK (+ pinned ARA_API / ARA_Library submodules)
+        shell: bash
         run: |
+          set -e
           git clone https://github.com/Celemony/ARA_SDK.git external/ARA_SDK
-          git -C external/ARA_SDK checkout ${{ env.ARA_SDK_COMMIT }}
-          git -C external/ARA_SDK submodule update --init --recursive
+          git -C external/ARA_SDK checkout "$ARA_SDK_COMMIT"
+          rm -rf external/ARA_SDK/ARA_API external/ARA_SDK/ARA_Library
+          git clone https://github.com/Celemony/ARA_API.git external/ARA_SDK/ARA_API
+          git -C external/ARA_SDK/ARA_API checkout "$ARA_API_COMMIT"
+          git clone https://github.com/Celemony/ARA_Library.git external/ARA_SDK/ARA_Library
+          git -C external/ARA_SDK/ARA_Library checkout "$ARA_LIBRARY_COMMIT"
+          test -f external/ARA_SDK/ARA_Library/Utilities/ARAChannelArrangement.cpp
 
       - name: Clone libfvad
         run: |
