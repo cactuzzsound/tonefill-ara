@@ -1,8 +1,12 @@
 #include "plugin/ui/WaveformWindow.h"
 #include "plugin/SessionState.h"
 
+#include <juce_audio_basics/juce_audio_basics.h>
+#include <juce_audio_devices/juce_audio_devices.h>
+
 #include <algorithm>
 #include <cmath>
+#include <memory>
 #include <utility>
 #include <vector>
 
@@ -30,6 +34,63 @@ double niceStep (double spanSeconds)
     return mult * pow10;
 }
 } // namespace
+
+//==============================================================================
+// Auditions the generated fill through the system's default output, so you can hear the room tone
+// without pressing play in the DAW. Loops the seamless fill snapshot with linear-interpolated
+// resampling from the fill's sample rate to the output device's rate.
+class FillAuditionSource : public juce::AudioSource
+{
+public:
+    void setFill (std::shared_ptr<const SessionState::FillBuffer> f, double srcSr)
+    {
+        const juce::SpinLock::ScopedLockType l (lock_);
+        fill_ = std::move (f); srcSr_ = srcSr;   // keep pos_ so a live re-snapshot doesn't restart
+    }
+    void restart() { const juce::SpinLock::ScopedLockType l (lock_); pos_ = 0.0; }
+
+    void prepareToPlay (int, double deviceSr) override { deviceSr_ = deviceSr; }
+    void releaseResources() override {}
+
+    void getNextAudioBlock (const juce::AudioSourceChannelInfo& info) override
+    {
+        info.clearActiveBufferRegion();
+        std::shared_ptr<const SessionState::FillBuffer> f;
+        double srcSr, deviceSr;
+        {
+            const juce::SpinLock::ScopedTryLockType l (lock_);
+            if (! l.isLocked()) return;
+            f = fill_; srcSr = srcSr_; deviceSr = deviceSr_;
+        }
+        if (! f || f->empty() || (*f)[0].empty() || deviceSr <= 0.0) return;
+
+        const auto& src = *f;
+        const int nSrcCh = (int) src.size();
+        const auto len = (double) src[0].size();
+        const double ratio = srcSr / deviceSr; // source samples advanced per output sample
+        const int outCh = info.buffer->getNumChannels();
+
+        for (int i = 0; i < info.numSamples; ++i)
+        {
+            const auto i0 = (long long) pos_ % (long long) len;
+            const auto i1 = (i0 + 1) % (long long) len;
+            const float frac = (float) (pos_ - std::floor (pos_));
+            for (int ch = 0; ch < outCh; ++ch)
+            {
+                const auto& s = src[(std::size_t) juce::jmin (ch, nSrcCh - 1)];
+                const float v = s[(std::size_t) i0] * (1.0f - frac) + s[(std::size_t) i1] * frac;
+                info.buffer->addSample (ch, info.startSample + i, v);
+            }
+            pos_ += ratio;
+            if (pos_ >= len) pos_ -= len;
+        }
+    }
+
+private:
+    juce::SpinLock lock_;
+    std::shared_ptr<const SessionState::FillBuffer> fill_;
+    double srcSr_ = 48000.0, deviceSr_ = 48000.0, pos_ = 0.0;
+};
 
 //==============================================================================
 // Interactive waveform view.
@@ -237,10 +298,12 @@ private:
 
 //==============================================================================
 // Content: toolbar + view + horizontal scrollbar.
-class WaveformContent : public juce::Component, private juce::ScrollBar::Listener
+class WaveformContent : public juce::Component,
+                        private juce::ScrollBar::Listener,
+                        private juce::Timer
 {
 public:
-    explicit WaveformContent (SessionState& s) : view_ (s), hScroll_ (false)
+    explicit WaveformContent (SessionState& s) : state_ (s), view_ (s), hScroll_ (false)
     {
         addAndMakeVisible (view_);
         addAndMakeVisible (hScroll_);
@@ -258,14 +321,25 @@ public:
         fitBtn_.onClick   = [this] { view_.fit(); syncScroll(); };
         clearBtn_.onClick = [this] { view_.clearSelection(); };
 
+        auditionBtn_.setButtonText ("Audition");
+        auditionBtn_.setClickingTogglesState (true);
+        auditionBtn_.setTooltip ("Play the generated room tone through your system's default output "
+                                 "(no need to press play in the DAW). Follows edits live.");
+        addAndMakeVisible (auditionBtn_);
+        auditionBtn_.onClick = [this] { auditionBtn_.getToggleState() ? startAudio() : stopAudio(); };
+
         view_.onViewChanged = [this] { syncScroll(); };
         setSize (900, 340);
     }
+
+    ~WaveformContent() override { stopAudio(); }
 
     void resized() override
     {
         auto r = getLocalBounds();
         auto tb = r.removeFromTop (30).reduced (6, 4);
+        auditionBtn_.setBounds (tb.removeFromRight (96));
+        tb.removeFromRight (10);
         for (auto* b : { &zoomInH_, &zoomOutH_, &zoomInV_, &zoomOutV_, &fitBtn_, &clearBtn_ })
         { b->setBounds (tb.removeFromLeft (54)); tb.removeFromLeft (6); }
         hScroll_.setBounds (r.removeFromBottom (14));
@@ -276,6 +350,44 @@ public:
     void paint (juce::Graphics& g) override { g.fillAll (ToneFillLookAndFeel::bg()); }
 
 private:
+    void startAudio()
+    {
+        double sr = 48000.0;
+        auto fill = state_.getExportFill (sr);
+        if (fill == nullptr || fill->empty() || (*fill)[0].empty())
+        { auditionBtn_.setToggleState (false, juce::dontSendNotification); return; } // nothing to play yet
+
+        audition_.setFill (fill, sr);
+        audition_.restart();
+        lastFill_ = fill.get();
+        if (adm_.initialiseWithDefaultDevices (0, 2).isNotEmpty())
+        { auditionBtn_.setToggleState (false, juce::dontSendNotification); return; }
+        player_.setSource (&audition_);
+        adm_.addAudioCallback (&player_);
+        auditionBtn_.setButtonText ("Stop");
+        startTimerHz (8); // live re-snapshot while auditioning
+    }
+
+    void stopAudio()
+    {
+        stopTimer();
+        adm_.removeAudioCallback (&player_);
+        player_.setSource (nullptr);
+        adm_.closeAudioDevice();
+        lastFill_ = nullptr;
+        auditionBtn_.setButtonText ("Audition");
+        auditionBtn_.setToggleState (false, juce::dontSendNotification);
+    }
+
+    void timerCallback() override
+    {
+        // Follow edits: if the worker republished a new fill, swap it in without restarting position.
+        double sr = 48000.0;
+        auto fill = state_.getExportFill (sr);
+        if (fill != nullptr && ! fill->empty() && ! (*fill)[0].empty() && fill.get() != lastFill_)
+        { audition_.setFill (fill, sr); lastFill_ = fill.get(); }
+    }
+
     void syncScroll()
     {
         const double total = view_.totalSamples();
@@ -284,9 +396,16 @@ private:
     }
     void scrollBarMoved (juce::ScrollBar*, double newStart) override { view_.setViewStart (newStart); }
 
+    SessionState& state_;
     WaveformView view_;
     juce::ScrollBar hScroll_;
-    juce::TextButton zoomInH_, zoomOutH_, zoomInV_, zoomOutV_, fitBtn_, clearBtn_;
+    juce::TextButton zoomInH_, zoomOutH_, zoomInV_, zoomOutV_, fitBtn_, clearBtn_, auditionBtn_;
+
+    // Audition audio (own output device; teardown order: adm_ closes first, then player_/source).
+    FillAuditionSource audition_;
+    juce::AudioSourcePlayer player_;
+    juce::AudioDeviceManager adm_;
+    const void* lastFill_ = nullptr;
 };
 
 //==============================================================================
