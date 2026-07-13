@@ -46,7 +46,7 @@ AAX_Result GetEffectDescriptions (AAX_ICollection* outCollection)
     if (err == AAX_SUCCESS)
         err = outCollection->AddEffect ("com.cactuzzsound.tonefill.audiosuite", descriptor);
 
-    outCollection->SetManufacturerName ("Cactuzz Sound");
+    outCollection->SetManufacturerName ("cactuzz sound");
     outCollection->AddPackageName ("ToneFill");
     outCollection->AddPackageName ("ToneFill AudioSuite");
     outCollection->AddPackageName ("TnFil");

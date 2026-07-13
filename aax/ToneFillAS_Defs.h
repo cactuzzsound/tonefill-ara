@@ -3,19 +3,32 @@
 #include "AAX.h" // AAX_CTypeID
 
 // Native AAX AudioSuite (HostProcessor) build of ToneFill. Separate plugin client from the JUCE
-// VST3/AU/ARA build; shares the same tonefill_engine. IDs are Cactuzz Sound's.
+// VST3/AU/ARA build; shares the same tonefill_engine. Vendor identity MUST match the other
+// formats (LostComzz precedent): "cactuzz sound" / 'Czsd'.
 namespace tonefill_aax
 {
-const AAX_CTypeID kManufactureID = 'Catz'; // Cactuzz Sound
+const AAX_CTypeID kManufactureID = 'Czsd'; // cactuzz sound (same vendor code as LostComzz)
 const AAX_CTypeID kProductID     = 'TfAS'; // ToneFill AudioSuite
 const AAX_CTypeID kPlugInID_AS   = 'TFas'; // AudioSuite plug-in type id
 
-// Parameter IDs (strings).
-constexpr const char* kParamClean     = "clean";   // Clean Level
-constexpr const char* kParamVoice     = "voice";   // Voice Reject
-constexpr const char* kParamVariation = "variat";  // Variation
-constexpr const char* kParamGain      = "gain";    // Output gain (dB)
-constexpr const char* kParamMovement  = "moveme";  // Movement (Complex)
-constexpr const char* kParamMode      = "mode";    // 0 Ambience, 1 Complex
-constexpr const char* kParamLearn     = "learn";   // 1 = learn this selection, 0 = generate
+// Parameter IDs (strings). Mirrors the JUCE plugin's parameter set 1:1 (Phase A parity);
+// Export Len / Full / Audition are omitted because Pro Tools provides them natively
+// (selection length, WHOLE FILE, Preview).
+constexpr const char* kParamClean      = "clean";    // Clean Level        0..1
+constexpr const char* kParamVoice      = "voice";    // Voice Reject       0..1
+constexpr const char* kParamMinFill    = "minfill";  // Min Fill           0.2..5 s
+constexpr const char* kParamFlatness   = "flatness"; // Flatness           0..1
+constexpr const char* kParamChunk      = "chunk";    // Chunk Size         0..1 (-> 200..3000 ms)
+constexpr const char* kParamXfade      = "xfade";    // Crossfade          0..1 (-> 5..50 %)
+constexpr const char* kParamSmooth     = "smooth";   // Smoothness         0..1 (Enhance window)
+constexpr const char* kParamGain       = "gain";     // Output             -24..+24 dB
+constexpr const char* kParamEnhance    = "enhance";  // Enhance (PaulStretch) on/off
+constexpr const char* kParamExperim    = "experi";   // Experimental (statistical) selection on/off
+constexpr const char* kParamHissOn     = "hisson";   // Hiss Filter on/off (Enhance only)
+constexpr const char* kParamHissFreq   = "hissfrq";  // Hiss corner        3000..15000 Hz
+constexpr const char* kParamHissQ      = "hissq";    // Hiss Q             0.3..2.0
+constexpr const char* kParamNormOn     = "normon";   // Normalize on/off
+constexpr const char* kParamNormTarget = "normtgt";  // Normalize target   -60..0 (dBFS or LUFS)
+constexpr const char* kParamNormLufs   = "normluf";  // 1 = LUFS, 0 = dBFS (peak)
+constexpr const char* kParamSeed       = "seed";     // Variation seed     1..100 (nudge = Regenerate)
 } // namespace tonefill_aax

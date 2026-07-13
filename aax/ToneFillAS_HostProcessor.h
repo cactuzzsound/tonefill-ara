@@ -1,11 +1,17 @@
 #pragma once
 
 #include "AAX_CHostProcessor.h"
-#include <vector>
-#include <cstdint>
 
-// AudioSuite HostProcessor: LEARN accumulates the selection (or whole file) and analyses it in
-// PostRender; GENERATE outputs room tone synthesised from the most-recently learned model.
+#include "engine/model/AmbienceModel.h"
+
+#include <cstdint>
+#include <string>
+#include <vector>
+
+// AudioSuite HostProcessor: random-access reads the source (selection or WHOLE FILE), analyses it
+// with tonefill_engine (same path as the JUCE FillWorker), renders a seamless loop, and tiles it
+// across the rendered range. The model and fill are CACHED keyed on (source range + parameters),
+// so Preview -> tweak render knob -> Render never re-analyses unless an analysis input changed.
 class ToneFillAS_HostProcessor : public AAX_CHostProcessor
 {
 public:
@@ -19,15 +25,22 @@ public:
     AAX_Result PostRender () override;
 
 private:
-    double readNorm (const char* paramID) const; // normalized [0,1] parameter value
+    double readNorm (const char* paramID) const;      // normalized [0,1] parameter value
+    double readReal (const char* paramID, double lo, double hi) const { return lo + readNorm (paramID) * (hi - lo); }
     double sampleRate() const;
-    void   analyzeAndBuild (const float* const inAudioIns[], int32_t inAudioInCount, int32_t windowSize);
+
+    // Re-analyse / re-render only when the relevant inputs changed (cached across passes).
+    void ensureFill (const float* const inAudioIns[], int32_t inAudioInCount, int32_t windowSize);
+    bool analyze (const float* const inAudioIns[], int32_t inAudioInCount, int32_t windowSize);
+    void renderFill();
 
     int    mChannels = 0;
     double mSampleRate = 48000.0;
-    bool   mAnalyzed = false;
 
-    std::vector<std::vector<float>> mFill;     // generated loop tiled over the selection
-    long long                       mFillLen  = 0;
-    long long                       mGenPos   = 0;
+    tonefill::engine::model::AmbienceModelPtr mModel; // cached learned model
+    std::string mAnalysisSig, mRenderSig;             // cache keys
+
+    std::vector<std::vector<float>> mFill;            // seamless loop, post hiss/normalize
+    long long                       mFillLen = 0;
+    long long                       mGenPos  = 0;     // tiling position within the pass
 };

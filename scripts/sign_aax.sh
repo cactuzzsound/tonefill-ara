@@ -14,7 +14,7 @@ WCGUID="53B16D60-73F3-11F1-B005-005056920FF7"
 SIGNID="Developer ID Application: Jakub Juchniewicz (5LSJ6C76Q2)"
 
 ACCOUNT="${1:?usage: sign_aax.sh <ilok-account-id> [path-to-built.aaxplugin]}"
-SRC="${2:-build/src/plugin/ToneFillPlugin_artefacts/RelWithDebInfo/AAX/ToneFill.aaxplugin}"
+SRC="${2:-build/aax/ToneFill.aaxplugin}"  # native AudioSuite HostProcessor bundle (aax/)
 DEST="/Library/Application Support/Avid/Audio/Plug-Ins/ToneFill.aaxplugin"
 
 [ -d "$SRC" ] || { echo "AAX not found at: $SRC (build ToneFillPlugin_AAX first)"; exit 1; }
