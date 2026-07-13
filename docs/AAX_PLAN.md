@@ -78,11 +78,16 @@ Bring `aax/` to today's engine. PT's auto-generated panel is ugly but complete; 
 - Known past AS bugs are already fixed at the engine level (grainLen ≤ srcLen/4 clamp; the native
   client reads params directly, no shared SessionState).
 
-### Phase B — JUCE GUI inside AAX (the big chunk)
+### Phase B — dedicated AudioSuite GUI (the big chunk)
+Deliberately a SEPARATE view, not a port of MainView. The AudioSuite workflow differs enough
+(no Export Len / Audition / Full — PT provides selection length, Preview and WHOLE FILE natively;
+adds Preview→Render cycle + Seed) that sharing the main view would mean hiding a third of it behind
+host checks. What IS shared: `tonefill_engine` (the sound) and `ToneFillLookAndFeel` (the look).
 - `AAX_CEffectGUI` subclass: on `CreateViewContents`/`SetViewContainer`, attach a JUCE component to
   `GetPtr()`'s NSView/HWND (`addToDesktop` with the parent handle).
-- Port the restyled UI (cream/navy/orange/purple, group cards, hiss panel, logo). Drop DAW-only
-  bits (Export Len, Audition/Expand); keep the waveform with manual drag-selection.
+- New compact `ASView` (JUCE, same LookAndFeel/logo): Detection + Structure + Texture knobs, Enhance
+  + Classic/Experimental + Hiss panel, Normalize, Seed/Regenerate, waveform with manual
+  drag-selection and used/avail/seam readouts.
 - Wire knobs → AAX params; waveform/readouts/manual-ranges ↔ CustomData + notifications.
 
 ### Phase C — packaging, signing, CI
