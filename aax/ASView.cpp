@@ -1,10 +1,12 @@
 #include "ASView.h"
 #include "ToneFillAS_Defs.h"
+#include "ASShared.h"
 
 #include "BinaryData.h"
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 using namespace tonefill_aax;
 using LNF = tonefill::plugin::ui::ToneFillLookAndFeel;
@@ -92,6 +94,13 @@ ASView::ASView (Bridge bridge) : bridge_ (std::move (bridge))
     classicBtn_.onClick = [this] { bridge_.setNorm (kParamExperim, 0.0); };
     expBtn_.onClick     = [this] { bridge_.setNorm (kParamExperim, 1.0); };
 
+    // Auto / Manual segmented pair (Manual = learn only from the regions dragged on the waveform).
+    for (auto* b : { &autoBtn_, &manualBtn_ }) { b->setClickingTogglesState (false); addAndMakeVisible (*b); }
+    autoBtn_.setTooltip ("Auto: find clean room tone automatically in the selection.");
+    manualBtn_.setTooltip ("Manual: drag on the waveform below to pick the room-tone regions; click one to remove.");
+    autoBtn_.onClick   = [this] { bridge_.setNorm (kParamManual, 0.0); };
+    manualBtn_.onClick = [this] { bridge_.setNorm (kParamManual, 1.0); };
+
     regenBtn_.setButtonText ("Regenerate");
     regenBtn_.setTooltip ("New random variation of the fill (same settings). Nudges the Seed so the next Render/Preview differs.");
     regenBtn_.onClick = [this] { bridge_.setNorm (kParamSeed, rng_.nextDouble()); };
@@ -113,8 +122,8 @@ ASView::ASView (Bridge bridge) : bridge_ (std::move (bridge))
     tipLbl_.setJustificationType (juce::Justification::centredLeft);
     addAndMakeVisible (tipLbl_);
 
-    setSize (660, 400);
-    startTimerHz (10);
+    setSize (720, 548);
+    startTimerHz (12);
     timerCallback();
 }
 
@@ -131,6 +140,21 @@ void ASView::timerCallback()
     const bool exp = bridge_.getNorm (kParamExperim) > 0.5;
     classicBtn_.setToggleState (! exp, juce::dontSendNotification);
     expBtn_.setToggleState (exp, juce::dontSendNotification);
+
+    manualMode_ = bridge_.getNorm (kParamManual) > 0.5;
+    autoBtn_.setToggleState (! manualMode_, juce::dontSendNotification);
+    manualBtn_.setToggleState (manualMode_, juce::dontSendNotification);
+
+    // Pull the analysed source length (for x mapping) + the manual selection from shared state.
+    if (bridge_.shared != nullptr && ! dragging_)
+    {
+        const juce::SpinLock::ScopedTryLockType l (bridge_.shared->lock);
+        if (l.isLocked())
+        {
+            waveSamples_ = bridge_.shared->sourceSamples;
+            selections_  = bridge_.shared->manualRanges;
+        }
+    }
 
     const bool enh  = bridge_.getNorm (kParamEnhance) > 0.5;
     const bool norm = bridge_.getNorm (kParamNormOn)  > 0.5;
@@ -201,6 +225,93 @@ void ASView::paint (juce::Graphics& g)
     const bool enh = bridge_.getNorm (kParamEnhance) > 0.5;
     card (hissCard_, "HISS FILTER", enh ? LNF::coral() : LNF::muted());
     card (tipCard_, "TIP", LNF::accent());
+
+    // Header grouped background behind Auto|Manual.
+    {
+        auto u = autoBtn_.getBounds().getUnion (manualBtn_.getBounds()).toFloat().expanded (4.0f);
+        g.setColour (LNF::panelHi()); g.fillRoundedRectangle (u, 9.0f);
+        g.setColour (LNF::line());    g.drawRoundedRectangle (u, 9.0f, 1.0f);
+    }
+
+    // Waveform card.
+    card (waveCard_, nullptr, {});
+    g.setColour (LNF::panelHi());
+    g.fillRoundedRectangle (waveArea_.toFloat(), 6.0f);
+
+    std::vector<float> peak; std::vector<char> clean; float usedSec = 0, availSec = 0, seamDb = 0, levelDb = -120.0f; int chunks = 0; bool ready = false; double sr = 48000.0;
+    if (bridge_.shared != nullptr)
+    {
+        const juce::SpinLock::ScopedTryLockType l (bridge_.shared->lock);
+        if (l.isLocked())
+        {
+            peak = bridge_.shared->peak; clean = bridge_.shared->clean;
+            usedSec = bridge_.shared->usedSec; availSec = bridge_.shared->availSec; seamDb = bridge_.shared->seamDb;
+            levelDb = bridge_.shared->levelDb; chunks = bridge_.shared->chunks; ready = bridge_.shared->ready;
+            sr = bridge_.shared->sampleRate;
+        }
+    }
+
+    if (! peak.empty())
+    {
+        const int n = (int) peak.size();
+        const float w = (float) waveArea_.getWidth(), midY = (float) waveArea_.getCentreY();
+        const float halfH = (float) waveArea_.getHeight() * 0.5f - 4.0f, bw = w / (float) n;
+        g.setColour (LNF::line());
+        g.fillRect ((float) waveArea_.getX(), midY - 0.5f, w, 1.0f);
+        auto selBin = [&] (int i) -> bool
+        {
+            if (waveSamples_ <= 0) return false;
+            const int s0 = (int) ((long long) i * waveSamples_ / n), s1 = (int) ((long long) (i + 1) * waveSamples_ / n);
+            for (const auto& s : selections_) if (s.first < s1 && s.second > s0) return true;
+            if (dragging_) { const int a = juce::jmin (dragStart_, dragCur_), b = juce::jmax (dragStart_, dragCur_); if (a < s1 && b > s0) return true; }
+            return false;
+        };
+        for (int i = 0; i < n; ++i)
+        {
+            const float amp = juce::jlimit (0.0f, 1.0f, std::sqrt (juce::jmax (0.0f, peak[(std::size_t) i])) * 1.4f);
+            const float hh = juce::jmax (1.0f, amp * halfH);
+            const bool lit = manualMode_ ? selBin (i) : (i < (int) clean.size() && clean[(std::size_t) i]);
+            g.setColour (lit ? LNF::accent() : juce::Colour (0xffc9c4b8));
+            g.fillRect ((float) waveArea_.getX() + (float) i * bw, midY - hh, juce::jmax (1.0f, bw + 0.5f), 2.0f * hh);
+        }
+        // manual selection edges
+        if (manualMode_)
+        {
+            auto edge = [&] (int s0, int s1, juce::Colour c)
+            { const float x0 = sampleToX (juce::jmin (s0, s1)), x1 = sampleToX (juce::jmax (s0, s1));
+              g.setColour (c); g.drawRect (juce::Rectangle<float> { x0, (float) waveArea_.getY(), juce::jmax (2.0f, x1 - x0), (float) waveArea_.getHeight() }, 1.0f); };
+            for (const auto& s : selections_) edge (s.first, s.second, LNF::accent().withAlpha (0.9f));
+            if (dragging_) edge (dragStart_, dragCur_, LNF::accent());
+        }
+        // timecode ruler
+        const double totalSec = (waveSamples_ > 0 && sr > 0) ? waveSamples_ / sr : 0.0;
+        g.setFont (juce::Font (9.5f));
+        if (totalSec > 0.0)
+            for (int i = 0; i <= 6; ++i)
+            {
+                const float x = waveRuler_.getX() + (float) i / 6.0f * waveRuler_.getWidth();
+                g.setColour (LNF::line());  g.fillRect (x, (float) waveRuler_.getY(), 1.0f, 4.0f);
+                g.setColour (LNF::muted());
+                g.drawText (juce::String (totalSec * i / 6.0, 1) + "s",
+                            (int) x + 2, waveRuler_.getY() + 3, 54, 10, juce::Justification::centredLeft, false);
+            }
+    }
+    else
+    {
+        g.setColour (LNF::muted());
+        g.setFont (juce::Font (12.0f));
+        g.drawText ("Press Preview (or Render) once to analyse the selection.", waveArea_, juce::Justification::centred, false);
+    }
+
+    // Status line (used / chunks / avail / seam / in), like the plugin.
+    g.setColour (LNF::navy());
+    g.setFont (juce::Font (12.0f));
+    const juce::String seamStr = (ready && seamDb > 0.05f) ? "   \xc2\xb7   seam " + juce::String (seamDb, 1) + " dB" + (seamDb > 4.0f ? " !" : "") : juce::String();
+    const juce::String txt = ready
+        ? "used " + juce::String (usedSec, 1) + " s (" + juce::String (chunks) + " chunks)   \xc2\xb7   avail "
+              + juce::String (availSec, 1) + " s" + seamStr + "   \xc2\xb7   in " + juce::String (levelDb, 0) + " dB"
+        : (manualMode_ ? "Manual: drag on the waveform to add room-tone regions." : "");
+    g.drawText (txt, dataArea_, juce::Justification::centredLeft, false);
 }
 
 void ASView::resized()
@@ -209,14 +320,16 @@ void ASView::resized()
     auto r = getLocalBounds().reduced (14);
 
     auto head = r.removeFromTop (40);
-    head.removeFromLeft (240); // logo
+    head.removeFromLeft (230); // logo
     {
-        auto pair = head.removeFromRight (196).withSizeKeepingCentre (196, 26);
-        const int w = (pair.getWidth() - 4) / 2;
-        classicBtn_.setBounds (pair.removeFromLeft (w)); pair.removeFromLeft (4); expBtn_.setBounds (pair);
-        head.removeFromRight (10);
+        auto seg = [] (juce::Rectangle<int> box, juce::TextButton& a, juce::TextButton& b)
+        { const int w = (box.getWidth() - 4) / 2; a.setBounds (box.removeFromLeft (w)); box.removeFromLeft (4); b.setBounds (box); };
+        seg (head.removeFromRight (188).withSizeKeepingCentre (188, 26), classicBtn_, expBtn_);
+        head.removeFromRight (8);
         (*std::find_if (toggles_.begin(), toggles_.end(), [] (auto& t) { return t->id == kParamEnhance; }))
-            ->btn.setBounds (head.removeFromRight (84).withSizeKeepingCentre (84, 26));
+            ->btn.setBounds (head.removeFromRight (80).withSizeKeepingCentre (80, 26));
+        head.removeFromRight (8);
+        seg (head.removeFromRight (120).withSizeKeepingCentre (120, 26), autoBtn_, manualBtn_);
     }
     r.removeFromTop (10);
 
@@ -272,4 +385,75 @@ void ASView::resized()
     foot.removeFromRight (12);
     tipCard_ = foot;
     tipLbl_.setBounds (tipCard_.reduced (14, 0).withTrimmedLeft (34));
+    r.removeFromTop (12);
+
+    // Waveform card (source overlay + status), like the plugin's bottom panel.
+    waveCard_ = r;
+    auto wc = waveCard_.reduced (12, 10);
+    waveArea_  = wc.removeFromTop (juce::jmax (40, wc.getHeight() - 34));
+    waveRuler_ = wc.removeFromTop (12);
+    wc.removeFromTop (4);
+    dataArea_ = wc.removeFromTop (16);
+}
+
+int ASView::xToSample (int x) const
+{
+    if (waveSamples_ <= 0 || waveArea_.getWidth() <= 0) return 0;
+    const float f = (float) (x - waveArea_.getX()) / (float) waveArea_.getWidth();
+    return juce::jlimit (0, waveSamples_, (int) std::lround (f * (float) waveSamples_));
+}
+
+float ASView::sampleToX (int sample) const
+{
+    if (waveSamples_ <= 0) return (float) waveArea_.getX();
+    return (float) waveArea_.getX() + (float) juce::jlimit (0, waveSamples_, sample) / (float) waveSamples_ * (float) waveArea_.getWidth();
+}
+
+void ASView::pushSelections()
+{
+    std::sort (selections_.begin(), selections_.end());
+    std::vector<std::pair<int, int>> merged;
+    for (const auto& s : selections_)
+        if (! merged.empty() && s.first <= merged.back().second) merged.back().second = juce::jmax (merged.back().second, s.second);
+        else merged.push_back (s);
+    selections_ = merged;
+    if (bridge_.shared != nullptr)
+    {
+        const juce::SpinLock::ScopedLockType l (bridge_.shared->lock);
+        bridge_.shared->manualRanges = selections_;
+    }
+    // Bump Seed a hair so the render signature changes and PT re-analyses on the next pass.
+    bridge_.setNorm (kParamSeed, rng_.nextDouble());
+}
+
+void ASView::mouseDown (const juce::MouseEvent& e)
+{
+    if (! manualMode_ || ! waveArea_.contains (e.getPosition()) || waveSamples_ <= 0) return;
+    dragging_ = true;
+    dragStart_ = dragCur_ = xToSample (e.x);
+    repaint();
+}
+
+void ASView::mouseDrag (const juce::MouseEvent& e)
+{
+    if (! dragging_) return;
+    dragCur_ = xToSample (e.x);
+    repaint();
+}
+
+void ASView::mouseUp (const juce::MouseEvent& e)
+{
+    if (! dragging_) return;
+    dragging_ = false;
+    const int a = juce::jmin (dragStart_, dragCur_), b = juce::jmax (dragStart_, dragCur_);
+    if (std::abs (sampleToX (b) - sampleToX (a)) < 4.0f)
+    {
+        const int s = xToSample (e.x);
+        const auto before = selections_.size();
+        selections_.erase (std::remove_if (selections_.begin(), selections_.end(),
+                           [s] (const std::pair<int, int>& r) { return s >= r.first && s <= r.second; }), selections_.end());
+        if (selections_.size() != before) pushSelections();
+    }
+    else { selections_.emplace_back (a, b); pushSelections(); }
+    repaint();
 }

@@ -73,6 +73,8 @@ AAX_Result ToneFillAS_Parameters::EffectInit()
     addBool  (kParamNormLufs,   "Norm Unit",   true, "dBFS", "LUFS");
     // Variation seed: nudging it = "Regenerate".
     addFloat (kParamSeed, "Seed", 1.0f, 1.0f, 100.0f);
+    // Auto (0) vs Manual (1): learn from the regions dragged on the waveform.
+    addBool (kParamManual, "Manual", false, "auto", "manual");
 
     return AAX_SUCCESS;
 }

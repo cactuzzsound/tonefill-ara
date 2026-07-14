@@ -1,5 +1,6 @@
 #include "ToneFillAS_GUI.h"
 #include "ASView.h"
+#include "ToneFillAS_Parameters.h"
 
 #include "AAX_IEffectParameters.h"
 #include "AAX_GUITypes.h"
@@ -26,6 +27,8 @@ void ToneFillAS_GUI::CreateViewContents()
     {
         if (auto* p = GetEffectParameters()) p->SetParameterNormalizedValue (id, v);
     };
+    if (auto* p = dynamic_cast<ToneFillAS_Parameters*> (GetEffectParameters()))
+        bridge.shared = &p->shared();
     mView = std::make_unique<ASView> (std::move (bridge));
 }
 

@@ -11,6 +11,8 @@
 
 namespace tonefill_aax
 {
+struct ASShared;
+
 // Dedicated AudioSuite view. Mirrors the plugin's MainView as closely as AudioSuite allows: the
 // only things dropped are the three Pro Tools provides natively (Full = WHOLE FILE, Audition =
 // Preview, Export = Render). Shares the plugin LookAndFeel + logo. Talks to the AAX parameters
@@ -22,6 +24,7 @@ public:
     {
         std::function<double (const char*)>       getNorm; // -> normalized [0,1]
         std::function<void (const char*, double)> setNorm; // normalized [0,1]
+        ASShared*                                 shared = nullptr; // processor<->GUI data
     };
 
     explicit ASView (Bridge bridge);
@@ -29,6 +32,9 @@ public:
 
     void paint (juce::Graphics&) override;
     void resized() override;
+    void mouseDown (const juce::MouseEvent&) override;
+    void mouseDrag (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override;
 
 private:
     enum Kind { KPct, KMinFill, KGain, KFreq, KQ, KNormTgt };
@@ -54,7 +60,17 @@ private:
     std::vector<std::unique_ptr<Knob>>   knobs_;
     std::vector<std::unique_ptr<Toggle>> toggles_;
     juce::TextButton classicBtn_ { "Classic" }, expBtn_ { "Experimental" };
+    juce::TextButton autoBtn_ { "Auto" }, manualBtn_ { "Manual" };
     juce::TextButton regenBtn_ { "Regenerate" };
+
+    // Waveform + manual selection (source-sample coords, mirrored to shared->manualRanges).
+    int  waveSamples_ = 0;
+    bool manualMode_ = false, dragging_ = false;
+    int  dragStart_ = 0, dragCur_ = 0;
+    std::vector<std::pair<int, int>> selections_;
+    int  xToSample (int x) const;
+    float sampleToX (int sample) const;
+    void pushSelections();
 
     juce::Label tipLbl_;
     std::array<juce::String, 8> tips_;
@@ -63,7 +79,7 @@ private:
 
     std::array<juce::Rectangle<int>, 3> groupCard_;
     std::vector<juce::Rectangle<int>>   valuePills_;
-    juce::Rectangle<int> normCard_, hissCard_, tipCard_, headerGroup_;
+    juce::Rectangle<int> normCard_, hissCard_, tipCard_, waveCard_, waveArea_, waveRuler_, dataArea_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ASView)
 };

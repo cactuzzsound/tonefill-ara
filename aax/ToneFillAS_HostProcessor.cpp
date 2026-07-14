@@ -1,5 +1,7 @@
 #include "ToneFillAS_HostProcessor.h"
 #include "ToneFillAS_Defs.h"
+#include "ToneFillAS_Parameters.h"
+#include "ASShared.h"
 
 #include "AAX_IController.h"
 #include "AAX_IEffectParameters.h"
@@ -28,6 +30,41 @@ void asLog (const juce::String& msg)
     juce::File::getSpecialLocation (juce::File::userHomeDirectory)
         .getChildFile ("tonefill_aax.log")
         .appendText (juce::Time::getCurrentTime().toString (false, true, true, true) + "  " + msg + "\n");
+}
+
+// Concatenate the manual regions (source-sample coords) into a learn buffer with tiny equal-power
+// joins (mirror of the JUCE plugin's buildManual).
+juce::AudioBuffer<float> buildManual (const juce::AudioBuffer<float>& src,
+                                      const std::vector<std::pair<int, int>>& ranges, double sr)
+{
+    const int ch = src.getNumChannels(), n = src.getNumSamples();
+    const int xf = (int) (0.02 * sr);
+    long long tot = 0;
+    for (const auto& r : ranges) tot += juce::jlimit (0, n, r.second) - juce::jlimit (0, n, r.first);
+    if (tot < (long long) (0.05 * sr)) { juce::AudioBuffer<float> c; c.makeCopyOf (src); return c; }
+    juce::AudioBuffer<float> out (ch, (int) tot);
+    int w = 0;
+    for (const auto& r : ranges)
+    {
+        const int s = juce::jlimit (0, n, r.first), e = juce::jlimit (0, n, r.second), len = e - s;
+        if (len <= 0) continue;
+        for (int c = 0; c < ch; ++c)
+        {
+            if (w > 0 && xf > 0)
+            {
+                const int ov = juce::jmin (xf, juce::jmin (len, w));
+                float* d = out.getWritePointer (c); const float* sp = src.getReadPointer (c);
+                for (int i = 0; i < ov; ++i)
+                { const float g = (float) i / (float) juce::jmax (1, ov - 1) * 1.5707964f;
+                  d[w - ov + i] = d[w - ov + i] * std::cos (g) + sp[s + i] * std::sin (g); }
+                out.copyFrom (c, w, src, c, s + ov, len - ov);
+            }
+            else out.copyFrom (c, w, src, c, s, len);
+        }
+        w += (w > 0 && xf > 0) ? len - juce::jmin (xf, juce::jmin (len, w)) : len;
+    }
+    out.setSize (ch, juce::jmax (1, w), true);
+    return out;
 }
 } // namespace
 
@@ -87,18 +124,25 @@ bool ToneFillAS_HostProcessor::analyze (const float* const inAudioIns[], int32_t
     juce::AudioBuffer<float> buf (ch, (int) len);
     for (int c = 0; c < ch; ++c) buf.copyFrom (c, 0, accum[(std::size_t) c].data(), (int) len);
 
+    // Manual mode: learn only from the regions the user dragged on the waveform (from the GUI).
+    ASShared* sh = nullptr;
+    if (auto* p = dynamic_cast<ToneFillAS_Parameters*> (GetEffectParameters())) sh = &p->shared();
+    std::vector<std::pair<int, int>> ranges;
+    if (sh != nullptr) { const juce::SpinLock::ScopedLockType l (sh->lock); ranges = sh->manualRanges; }
+    const bool useManual = readNorm (kParamManual) > 0.5 && ! ranges.empty();
+    const juce::AudioBuffer<float> learnInput = useManual ? buildManual (buf, ranges, mSampleRate) : buf;
+
     tonefill::core::DiagnosticsLogger diag;
     tonefill::engine::analysis::AnalysisSession session (diag);
     std::atomic<bool> cancel { false };
 
-    // Mirror of the JUCE FillWorker's AnalysisContext (Phase A parity).
     tonefill::engine::analysis::AnalysisContext ctx;
-    ctx.leftContext.makeCopyOf (buf);
-    ctx.rightContext.makeCopyOf (buf);
+    ctx.leftContext.makeCopyOf (learnInput);
+    ctx.rightContext.makeCopyOf (learnInput);
     ctx.analysisSampleRate = mSampleRate;
     ctx.numChannels = ch;
     ctx.leftEnabled = true;
-    ctx.useManualSelection = false;
+    ctx.useManualSelection = useManual;
     ctx.cleanThreshold        = (float) readNorm (kParamClean);
     ctx.speechReject          = (float) readNorm (kParamVoice);
     ctx.flatness              = (float) readNorm (kParamFlatness);
@@ -111,7 +155,39 @@ bool ToneFillAS_HostProcessor::analyze (const float* const inAudioIns[], int32_t
     mModel = rr.value();
     asLog ("analyze: OK learnSec=" + juce::String (mModel->learnMaterialSeconds)
            + " avail=" + juce::String (mModel->availableCleanSeconds)
-           + " chunks=" + juce::String ((int) mModel->cleanRanges.size()));
+           + " chunks=" + juce::String ((int) mModel->cleanRanges.size()) + " manual=" + juce::String ((int) useManual));
+
+    // Publish waveform + diagnostics to the GUI (peaks over the WHOLE analysed source; clean overlay
+    // = the manual regions in Manual, or the auto-selected ranges otherwise).
+    if (sh != nullptr)
+    {
+        const int bins = 600;
+        const int per = juce::jmax (1, (int) (len / bins));
+        std::vector<float> peak ((std::size_t) bins, 0.0f);
+        std::vector<char>  clean ((std::size_t) bins, 0);
+        const float* s0 = buf.getReadPointer (0);
+        for (int b = 0; b < bins; ++b)
+        {
+            float pk = 0.0f; const int from = b * per, to = juce::jmin (from + per, (int) len);
+            for (int i = from; i < to; ++i) pk = juce::jmax (pk, std::fabs (s0[i]));
+            peak[(std::size_t) b] = pk;
+        }
+        const auto& overlay = useManual ? ranges : mModel->cleanRanges;
+        for (int b = 0; b < bins; ++b)
+        {
+            const int bs = b * per, be = bs + per; bool cl = false;
+            for (const auto& r : overlay) if (r.first < be && r.second > bs) { cl = true; break; }
+            clean[(std::size_t) b] = cl ? 1 : 0;
+        }
+        const float targetRms = (mModel->noisePerChannel.empty() ? 0.0f : mModel->noisePerChannel[0].targetRms);
+        const juce::SpinLock::ScopedLockType l (sh->lock);
+        sh->peak = std::move (peak); sh->clean = std::move (clean);
+        sh->sourceSamples = (int) len; sh->sampleRate = mSampleRate;
+        sh->usedSec = mModel->learnMaterialSeconds; sh->availSec = mModel->availableCleanSeconds;
+        sh->seamDb = mModel->joinRoughnessDb; sh->chunks = (int) mModel->cleanRanges.size();
+        sh->levelDb = targetRms > 0.0f ? 20.0f * std::log10 (targetRms) : -120.0f;
+        sh->ready = true;
+    }
     return true;
 }
 
@@ -210,12 +286,19 @@ void ToneFillAS_HostProcessor::renderFill()
 
 void ToneFillAS_HostProcessor::ensureFill (const float* const inAudioIns[], int32_t inAudioInCount, int32_t windowSize)
 {
-    char sig[192];
-    std::snprintf (sig, sizeof (sig), "%lld:%lld:%d:%.0f|%.4f %.4f %.4f %.4f %d",
+    // Manual state + a cheap hash of the ranges -> re-analyse when the selection changes.
+    long long manHash = readNorm (kParamManual) > 0.5 ? 1 : 0;
+    if (auto* p = dynamic_cast<ToneFillAS_Parameters*> (GetEffectParameters()))
+    {
+        const juce::SpinLock::ScopedLockType l (p->shared().lock);
+        for (const auto& r : p->shared().manualRanges) manHash = manHash * 1000003LL + r.first * 31 + r.second;
+    }
+    char sig[224];
+    std::snprintf (sig, sizeof (sig), "%lld:%lld:%d:%.0f|%.4f %.4f %.4f %.4f %d|%lld",
                    (long long) GetSrcStart(), (long long) GetSrcEnd(), mChannels, mSampleRate,
                    readNorm (kParamClean), readNorm (kParamVoice),
                    readNorm (kParamMinFill), readNorm (kParamFlatness),
-                   readNorm (kParamExperim) > 0.5 ? 1 : 0);
+                   readNorm (kParamExperim) > 0.5 ? 1 : 0, manHash);
     if (mAnalysisSig != sig)
     {
         if (! analyze (inAudioIns, inAudioInCount, windowSize)) return;
