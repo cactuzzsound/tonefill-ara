@@ -43,11 +43,27 @@ aax_plugin(TARGET_NAME ToneFillAS
 target_sources(ToneFillAS PRIVATE
     ToneFillAS_Describe.cpp
     ToneFillAS_Parameters.cpp
-    ToneFillAS_HostProcessor.cpp)
+    ToneFillAS_HostProcessor.cpp
+    ToneFillAS_GUI.cpp
+    ASView.cpp)
 
 target_include_directories(ToneFillAS PRIVATE
     "${AAX_SDK_PATH}/Interfaces" "${AAX_SDK_PATH}/Interfaces/ACF"
     "${CMAKE_SOURCE_DIR}/src")
 
 target_compile_options(ToneFillAS PRIVATE -Wno-multichar)
-target_link_libraries(ToneFillAS PRIVATE tonefill_engine)
+
+# GUI: host a JUCE component in PT's native view. Needs juce_gui_basics (pulls graphics/events) and
+# the embedded logo (ToneFillAssets -> BinaryData.h). JUCE definitions match the plugin build so the
+# ScopedJuceInitialiser_GUI / desktop hosting behave the same.
+target_link_libraries(ToneFillAS PRIVATE
+    tonefill_engine
+    ToneFillAssets
+    juce::juce_gui_basics
+    juce::juce_recommended_config_flags
+    juce::juce_recommended_warning_flags)
+target_compile_definitions(ToneFillAS PRIVATE
+    JUCE_STANDALONE_APPLICATION=0
+    JUCE_MODAL_LOOPS_PERMITTED=0
+    JUCE_WEB_BROWSER=0
+    JUCE_USE_CURL=0)

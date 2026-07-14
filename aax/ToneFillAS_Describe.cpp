@@ -1,6 +1,7 @@
 #include "ToneFillAS_Defs.h"
 #include "ToneFillAS_Parameters.h"
 #include "ToneFillAS_HostProcessor.h"
+#include "ToneFillAS_GUI.h"
 
 #include "AAX_ICollection.h"
 #include "AAX_IEffectDescriptor.h"
@@ -33,6 +34,7 @@ static AAX_Result DescribeEffect (AAX_IEffectDescriptor* outDescriptor)
 
     outDescriptor->AddProcPtr (reinterpret_cast<void*> (ToneFillAS_Parameters::Create),    kAAX_ProcPtrID_Create_EffectParameters);
     outDescriptor->AddProcPtr (reinterpret_cast<void*> (ToneFillAS_HostProcessor::Create), kAAX_ProcPtrID_Create_HostProcessor);
+    outDescriptor->AddProcPtr (reinterpret_cast<void*> (ToneFillAS_GUI::Create),           kAAX_ProcPtrID_Create_EffectGUI);
 
     return outDescriptor->SetProperties (properties);
 }
