@@ -94,6 +94,7 @@ AAX_Result ToneFillAS_HostProcessor::PreRender (int32_t iAudioInCount, int32_t /
     mChannels   = juce::jmax (1, iAudioInCount);
     mSampleRate = sampleRate();
     mGenPos     = 0;
+    mHiss.clear(); mHissLastFreq = -1.0f; mHissLastQ = -1.0f; // fresh filter state per pass
     // NOTE: model + fill caches survive across passes (Preview -> Render) on purpose; ensureFill
     // re-analyses / re-renders only when the relevant parameters or the source range changed.
     asLog ("PreRender: ch=" + juce::String (mChannels) + " sr=" + juce::String (mSampleRate));
@@ -121,8 +122,21 @@ bool ToneFillAS_HostProcessor::analyze (const float* const inAudioIns[], int32_t
     asLog ("analyze: srcRange=" + juce::String ((long long) (s1 - s0)) + " read=" + juce::String (len) + " ch=" + juce::String (ch));
     if (len < 4096) { asLog ("analyze: too little source"); return false; }
 
-    juce::AudioBuffer<float> buf (ch, (int) len);
-    for (int c = 0; c < ch; ++c) buf.copyFrom (c, 0, accum[(std::size_t) c].data(), (int) len);
+    juce::AudioBuffer<float> full (ch, (int) len);
+    for (int c = 0; c < ch; ++c) full.copyFrom (c, 0, accum[(std::size_t) c].data(), (int) len);
+
+    // Mono detection (mirror of the ARA path): near-identical L/R -> collapse to one correlated
+    // channel so a dual-mono source renders as mono, not decorrelated stereo.
+    int effCh = ch;
+    if (ch >= 2)
+    {
+        double diff = 0.0, ref = 0.0;
+        const float* a = full.getReadPointer (0); const float* b = full.getReadPointer (1);
+        for (int i = 0; i < (int) len; ++i) { const double d = a[i] - b[i]; diff += d * d; ref += (double) a[i] * a[i]; }
+        if (ref > 0.0 && diff / ref < 1.0e-4) effCh = 1;
+    }
+    juce::AudioBuffer<float> buf (effCh, (int) len);
+    for (int c = 0; c < effCh; ++c) buf.copyFrom (c, 0, full, c, 0, (int) len);
 
     // Manual mode: learn only from the regions the user dragged on the waveform (from the GUI).
     ASShared* sh = nullptr;
@@ -140,7 +154,7 @@ bool ToneFillAS_HostProcessor::analyze (const float* const inAudioIns[], int32_t
     ctx.leftContext.makeCopyOf (learnInput);
     ctx.rightContext.makeCopyOf (learnInput);
     ctx.analysisSampleRate = mSampleRate;
-    ctx.numChannels = ch;
+    ctx.numChannels = effCh;
     ctx.leftEnabled = true;
     ctx.useManualSelection = useManual;
     ctx.cleanThreshold        = (float) readNorm (kParamClean);
@@ -232,42 +246,21 @@ void ToneFillAS_HostProcessor::renderFill()
         }
     if (chans.empty() || chans[0].empty()) { asLog ("render: empty"); return; }
 
-    // Hiss filter (Enhance only): baked into the offline render (the plugin applies it live).
-    if (s.paulStretch && readNorm (kParamHissOn) > 0.5)
-    {
-        const double freq = readReal (kParamHissFreq, 3000.0, 15000.0);
-        const double q    = readReal (kParamHissQ, 0.3, 2.0);
-        for (auto& c : chans)
-        {
-            juce::IIRFilter f;
-            f.setCoefficients (juce::IIRCoefficients::makeLowPass (mSampleRate, freq, q));
-            f.processSamples (c.data(), (int) c.size());
-        }
-        asLog ("hiss: baked lp " + juce::String (freq, 0) + " Hz q=" + juce::String (q, 2));
-    }
-
-    // Normalize: measured on what will ACTUALLY be rendered (S7.3). Selection shorter than the
-    // loop -> measure that prefix; longer -> the loop repeats, so the loop measure is the output
-    // measure (gated integration of a repeating signal converges to the loop's value).
+    // Normalize: measured on the WHOLE loop (identical to the ARA applyAndPublish path). The hiss
+    // filter is NOT baked here - it is applied live on the tiled output in RenderAudio, exactly like
+    // the ARA processBlock, so measurement and filter-continuity match the plugin.
     if (readNorm (kParamNormOn) > 0.5)
     {
         const bool lufs = readNorm (kParamNormLufs) > 0.5;
         const double target = readReal (kParamNormTarget, -60.0, 0.0);
-        const long long selLen = (long long) (GetSrcEnd() - GetSrcStart());
-        const long long measLen = juce::jmin<long long> ((long long) chans[0].size(),
-                                                          juce::jmax<long long> (1, selLen));
-        std::vector<std::vector<float>> meas (chans.size());
-        for (std::size_t c = 0; c < chans.size(); ++c)
-            meas[c].assign (chans[c].begin(), chans[c].begin() + (std::size_t) measLen);
-
-        const float measured = lufs ? tonefill::dsp::integratedLufs (meas, mSampleRate)
-                                    : tonefill::dsp::peakDbfs (meas);
+        const float measured = lufs ? tonefill::dsp::integratedLufs (chans, mSampleRate)
+                                    : tonefill::dsp::peakDbfs (chans);
         if (measured > -119.0f)
         {
             float gainDb = (float) target - measured;
             if (lufs) // keep true peak under -1 dBFS, like the plugin
             {
-                const float peakDb = tonefill::dsp::peakDbfs (meas);
+                const float peakDb = tonefill::dsp::peakDbfs (chans);
                 const float newPeak = peakDb + gainDb;
                 if (newPeak > -1.0f) gainDb -= (newPeak + 1.0f);
             }
@@ -306,11 +299,12 @@ void ToneFillAS_HostProcessor::ensureFill (const float* const inAudioIns[], int3
         mRenderSig.clear(); // model changed -> fill must be rebuilt
     }
 
+    // Only RENDER-affecting params here. Hiss Filter and Output gain are applied live in RenderAudio
+    // (like the ARA processBlock), so changing them must NOT force a re-render.
     char rsig[192];
-    std::snprintf (rsig, sizeof (rsig), "%.4f %.4f %.4f %d %.0f|%d %.4f %.4f|%d %.4f %d",
+    std::snprintf (rsig, sizeof (rsig), "%.4f %.4f %.4f %d %.0f|%d %.4f %d",
                    readNorm (kParamChunk), readNorm (kParamXfade), readNorm (kParamSmooth),
                    readNorm (kParamEnhance) > 0.5 ? 1 : 0, readReal (kParamSeed, 1.0, 100.0),
-                   readNorm (kParamHissOn) > 0.5 ? 1 : 0, readNorm (kParamHissFreq), readNorm (kParamHissQ),
                    readNorm (kParamNormOn) > 0.5 ? 1 : 0, readNorm (kParamNormTarget),
                    readNorm (kParamNormLufs) > 0.5 ? 1 : 0);
     if (mModel != nullptr && mRenderSig != rsig)
@@ -350,6 +344,23 @@ AAX_Result ToneFillAS_HostProcessor::RenderAudio (const float* const inAudioIns[
             std::memset (o, 0, sizeof (float) * (std::size_t) n);
     }
     if (mFillLen > 0) mGenPos += n;
+
+    // Hiss filter applied LIVE, stateful across the pass (identical to the ARA processBlock): only
+    // when Enhance AND Hiss Filter are on. Coefficients rebuilt only when the knobs move.
+    if (mFillLen > 0 && readNorm (kParamEnhance) > 0.5 && readNorm (kParamHissOn) > 0.5)
+    {
+        if ((int) mHiss.size() < ci) mHiss.resize ((std::size_t) ci);
+        const float freq = (float) readReal (kParamHissFreq, 3000.0, 15000.0);
+        const float q    = (float) readReal (kParamHissQ, 0.3, 2.0);
+        if (std::abs (freq - mHissLastFreq) > 0.5f || std::abs (q - mHissLastQ) > 1.0e-3f)
+        {
+            const auto co = juce::IIRCoefficients::makeLowPass (mSampleRate, freq, q);
+            for (auto& f : mHiss) f.setCoefficients (co);
+            mHissLastFreq = freq; mHissLastQ = q;
+        }
+        for (int c = 0; c < ci; ++c)
+            if (inAudioOuts[c]) mHiss[(std::size_t) c].processSamples (inAudioOuts[c], n);
+    }
     return AAX_SUCCESS;
 }
 

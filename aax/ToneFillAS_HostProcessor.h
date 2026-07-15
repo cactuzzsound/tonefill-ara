@@ -4,6 +4,8 @@
 
 #include "engine/model/AmbienceModel.h"
 
+#include <juce_audio_basics/juce_audio_basics.h>
+
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -40,7 +42,12 @@ private:
     tonefill::engine::model::AmbienceModelPtr mModel; // cached learned model
     std::string mAnalysisSig, mRenderSig;             // cache keys
 
-    std::vector<std::vector<float>> mFill;            // seamless loop, post hiss/normalize
+    std::vector<std::vector<float>> mFill;            // seamless loop (pre hiss; normalize baked in)
     long long                       mFillLen = 0;
     long long                       mGenPos  = 0;     // tiling position within the pass
+
+    // Hiss filter applied LIVE on the tiled output (identical to the ARA processBlock path):
+    // stateful across the whole render pass, so there's no filter-state discontinuity at loop wraps.
+    std::vector<juce::IIRFilter> mHiss;
+    float mHissLastFreq = -1.0f, mHissLastQ = -1.0f;
 };
