@@ -7,12 +7,25 @@
 #include "AAX_CBinaryTaperDelegate.h"
 #include "AAX_CBinaryDisplayDelegate.h"
 #include "AAX_CString.h"
+#include "AAX_Enums.h"
 
 using namespace tonefill_aax;
 
 AAX_CEffectParameters* AAX_CALLBACK ToneFillAS_Parameters::Create()
 {
     return new ToneFillAS_Parameters();
+}
+
+AAX_Result ToneFillAS_Parameters::NotificationReceived (AAX_CTypeID inType, const void* inData, uint32_t inSize)
+{
+    // Track offline preview state so the HostProcessor can render in the background during Preview
+    // but block for the correct fill during an offline Render.
+    if (inType == AAX_eNotificationEvent_ASPreviewState && inData != nullptr && inSize >= sizeof (int32_t))
+    {
+        const auto state = *reinterpret_cast<const int32_t*> (inData);
+        mShared.previewing.store (state == AAX_ePreviewState_Start);
+    }
+    return AAX_CEffectParameters::NotificationReceived (inType, inData, inSize);
 }
 
 AAX_Result ToneFillAS_Parameters::EffectInit()

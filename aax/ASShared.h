@@ -2,6 +2,7 @@
 
 #include <juce_core/juce_core.h>
 
+#include <atomic>
 #include <utility>
 #include <vector>
 
@@ -29,5 +30,10 @@ struct ASShared
 
     // GUI -> processor (manual room-tone regions, in source-sample coordinates)
     std::vector<std::pair<int, int>> manualRanges;
+
+    // Set by the Parameters' ASPreviewState notification. Preview (realtime) -> the render thread
+    // outputs the last-good fill and the worker recomputes in the background (no stall); when false
+    // (offline Render) the render thread blocks for the correct fill so the written file is right.
+    std::atomic<bool> previewing { false };
 };
 } // namespace tonefill_aax

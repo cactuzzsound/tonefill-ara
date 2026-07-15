@@ -12,6 +12,7 @@ class ToneFillAS_Parameters : public AAX_CEffectParameters
 public:
     static AAX_CEffectParameters* AAX_CALLBACK Create();
     AAX_Result EffectInit() override;
+    AAX_Result NotificationReceived (AAX_CTypeID inType, const void* inData, uint32_t inSize) override;
 
     tonefill_aax::ASShared& shared() { return mShared; }
 

@@ -2,18 +2,18 @@
 
 #include "AAX_CHostProcessor.h"
 
-#include "engine/model/AmbienceModel.h"
-
 #include <juce_audio_basics/juce_audio_basics.h>
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
-// AudioSuite HostProcessor: random-access reads the source (selection or WHOLE FILE), analyses it
-// with tonefill_engine (same path as the JUCE FillWorker), renders a seamless loop, and tiles it
-// across the rendered range. The model and fill are CACHED keyed on (source range + parameters),
-// so Preview -> tweak render knob -> Render never re-analyses unless an analysis input changed.
+// AudioSuite HostProcessor. The whole-source read (GetAudio) stays on the render thread, but the
+// heavy analyse + render runs on a BACKGROUND worker (like the ARA FillWorker), so Preview never
+// stalls: it keeps playing the last-good fill and swaps in the new one when the worker finishes.
+// During an offline Render (previewing == false) the render thread blocks for the correct fill so
+// the written file is right.
 class ToneFillAS_HostProcessor : public AAX_CHostProcessor
 {
 public:
@@ -27,27 +27,24 @@ public:
     AAX_Result PostRender () override;
 
 private:
-    double readNorm (const char* paramID) const;      // normalized [0,1] parameter value
+    class Worker;
+
+    double readNorm (const char* paramID) const;
     double readReal (const char* paramID, double lo, double hi) const { return lo + readNorm (paramID) * (hi - lo); }
     double sampleRate() const;
+    void   ensureRawSource (const float* const inAudioIns[], int32_t inAudioInCount, int32_t windowSize);
 
-    // Re-analyse / re-render only when the relevant inputs changed (cached across passes).
-    void ensureFill (const float* const inAudioIns[], int32_t inAudioInCount, int32_t windowSize);
-    bool analyze (const float* const inAudioIns[], int32_t inAudioInCount, int32_t windowSize);
-    void renderFill();
+    std::unique_ptr<Worker> mWorker;
 
     int    mChannels = 0;
     double mSampleRate = 48000.0;
+    long long mGenPos = 0;
 
-    tonefill::engine::model::AmbienceModelPtr mModel; // cached learned model
-    std::string mAnalysisSig, mRenderSig;             // cache keys
+    // Whole analysed source (mono-collapsed), read on the render thread, handed to the worker.
+    std::shared_ptr<const juce::AudioBuffer<float>> mRaw;
+    std::string mRawSig, mLastSubmitSig;
 
-    std::vector<std::vector<float>> mFill;            // seamless loop (pre hiss; normalize baked in)
-    long long                       mFillLen = 0;
-    long long                       mGenPos  = 0;     // tiling position within the pass
-
-    // Hiss filter applied LIVE on the tiled output (identical to the ARA processBlock path):
-    // stateful across the whole render pass, so there's no filter-state discontinuity at loop wraps.
+    // Hiss filter applied LIVE on the tiled output (stateful across the pass), like ARA.
     std::vector<juce::IIRFilter> mHiss;
     float mHissLastFreq = -1.0f, mHissLastQ = -1.0f;
 };
