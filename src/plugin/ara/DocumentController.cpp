@@ -1,55 +1,65 @@
 #include "plugin/ara/DocumentController.h"
-
-#ifndef TONEFILL_ARA_AVAILABLE
- #define TONEFILL_ARA_AVAILABLE 0
-#endif
+#include "plugin/ara/DocumentControllerImpl.h"
 
 // Real JUCE<->ARA binding (TF-005). CMake excludes this TU when the SDK is absent.
 #if TONEFILL_ARA_AVAILABLE
 
-#include <juce_audio_processors/juce_audio_processors.h>
-#include "plugin/ara/PlaybackRenderer.h"
-
 namespace tonefill::plugin::ara
 {
-// Document controller specialisation. Owns the editing lock the playback renderer uses, and
-// creates our ToneFillPlaybackRenderer (which replaces the region with synthesized room tone).
-class ToneFillDocumentController : public juce::ARADocumentControllerSpecialisation,
-                                   private ProcessingLockInterface
+std::shared_ptr<plugin::SessionState>
+ToneFillDocumentController::stateForSource (const juce::ARAAudioSource* source)
 {
-public:
-    using juce::ARADocumentControllerSpecialisation::ARADocumentControllerSpecialisation;
+    if (source == nullptr)
+        return nullptr;
 
-protected:
-    void willBeginEditing (juce::ARADocument*) override { processBlockLock.enterWrite(); }
-    void didEndEditing    (juce::ARADocument*) override { processBlockLock.exitWrite(); }
+    const std::lock_guard<std::mutex> l (statesLock_);
+    auto& slot = states_[source];
+    if (slot == nullptr)
+        slot = std::make_shared<plugin::SessionState>();
+    return slot;
+}
 
-    juce::ARAPlaybackRenderer* doCreatePlaybackRenderer() noexcept override
-    {
-        araLog ("DocumentController::doCreatePlaybackRenderer");
-        return new ToneFillPlaybackRenderer (getDocumentController(), *this);
-    }
+std::shared_ptr<plugin::SessionState> ToneFillDocumentController::stateForSoleSource()
+{
+    auto* document = getDocument();
+    if (document == nullptr)
+        return nullptr;
 
-    // Archive hooks are pure-virtual. No-op for now. TODO(TF-801): persist AmbienceModel.
-    bool doStoreObjectsToStream (juce::ARAOutputStream& output,
-                                 const juce::ARAStoreObjectsFilter* filter) override
-    {
-        juce::ignoreUnused (output, filter);
-        return true;
-    }
+    const auto& sources = document->getAudioSources();
+    if (sources.size() != 1)
+        return nullptr;
 
-    bool doRestoreObjectsFromStream (juce::ARAInputStream& input,
-                                     const juce::ARARestoreObjectsFilter* filter) override
-    {
-        juce::ignoreUnused (input, filter);
-        return true;
-    }
+    return stateForSource (sources.front());
+}
 
-private:
-    juce::ScopedTryReadLock getProcessingLock() override { return juce::ScopedTryReadLock { processBlockLock }; }
+juce::ARAPlaybackRenderer* ToneFillDocumentController::doCreatePlaybackRenderer() noexcept
+{
+    araLog ("DocumentController::doCreatePlaybackRenderer");
+    return new ToneFillPlaybackRenderer (getDocumentController(), *this);
+}
 
-    juce::ReadWriteLock processBlockLock;
-};
+bool ToneFillDocumentController::doStoreObjectsToStream (juce::ARAOutputStream& output,
+                                                         const juce::ARAStoreObjectsFilter* filter)
+{
+    juce::ignoreUnused (output, filter);
+    return true;
+}
+
+bool ToneFillDocumentController::doRestoreObjectsFromStream (juce::ARAInputStream& input,
+                                                             const juce::ARARestoreObjectsFilter* filter)
+{
+    juce::ignoreUnused (input, filter);
+    return true;
+}
+
+ToneFillDocumentController* specialisedDocumentController (ARA::PlugIn::DocumentController* dc)
+{
+    if (dc == nullptr)
+        return nullptr;
+
+    return juce::ARADocumentControllerSpecialisation::getSpecialisedDocumentController<
+        ToneFillDocumentController> (dc);
+}
 } // namespace tonefill::plugin::ara
 
 // JUCE's plugin client (IS_ARA_EFFECT) calls this global factory to advertise ARA support.

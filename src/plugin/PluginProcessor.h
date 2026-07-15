@@ -77,15 +77,19 @@ public:
     engine::render::RenderManager& renderManager() noexcept { return renderManager_; }
     ara::ARAIntegrationFacade& araFacade()   noexcept { return araFacade_; }
 
-    // Per-instance UI <-> worker bridge. NOT global: each plugin instance has its own, so
-    // multiple instances (Reaper makes one per item) don't clobber each other's state.
-    SessionState&                     sessionState()       noexcept { return *sessionState_; }
-    std::shared_ptr<SessionState>     sessionStatePtr()    noexcept { return sessionState_; }
+    // UI <-> worker bridge, shared with the other instances working on the same ARA audio source
+    // (see ara/DocumentControllerImpl.h) and scoped to it, so separate clips stay independent.
+    SessionState&                 sessionState()    noexcept { return *statePtr_.load (std::memory_order_acquire); }
+    std::shared_ptr<SessionState> sessionStatePtr() noexcept { return sharedState_ != nullptr ? sharedState_ : ownState_; }
 
 #if TONEFILL_ARA_AVAILABLE
-    // Called by JUCE once this instance is bound to ARA: hand our SessionState to this
-    // instance's playback renderer so its worker publishes to OUR editor (not a shared global).
+    // Called by JUCE once this instance is bound to ARA.
     void didBindToARA() noexcept override;
+
+    // Point this instance at the SessionState shared for our audio source. Cheap no-op once
+    // resolved; the editor retries on its timer because a host may attach the region after
+    // binding. Message thread only.
+    bool tryResolveSharedState();
 #endif
 
     // TODO(ARA): expose the ARA document controller factory via JUCE ARA support. With
@@ -101,7 +105,13 @@ private:
 
     // shared_ptr (not a plain member) so the ARA renderer/worker can co-own it and we never
     // get a use-after-free from base/member destruction-order surprises.
-    std::shared_ptr<SessionState>  sessionState_ { std::make_shared<SessionState>() };
+    //
+    // ownState_ is what we use until the shared one is found, and outside ARA entirely. It is
+    // kept alive for the processor's lifetime even after sharedState_ takes over, so statePtr_
+    // can never dangle across the swap.
+    std::shared_ptr<SessionState>  ownState_ { std::make_shared<SessionState>() };
+    std::shared_ptr<SessionState>  sharedState_;                    // from the document controller
+    std::atomic<SessionState*>     statePtr_ { ownState_.get() };   // what sessionState() returns
 
     // Non-ARA LEARN / GENERATE path (Pro Tools AudioSuite, or any plain insert). Learn mode:
     // capture + analyze the selection into learnedModel_ (output = passthrough). Generate mode:

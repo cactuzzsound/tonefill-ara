@@ -544,6 +544,12 @@ void MainView::resized()
 
 void MainView::timerCallback()
 {
+   #if TONEFILL_ARA_AVAILABLE
+    // Retry until it sticks: hosts attach the region after binding, and until we find the state
+    // shared with the renderer's instance the knobs below would write somewhere nobody reads.
+    processor_.tryResolveSharedState();
+   #endif
+
     auto& apvts = processor_.parameters().apvts;
     auto& ss = processor_.sessionState();
 

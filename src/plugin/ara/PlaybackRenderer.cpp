@@ -10,6 +10,7 @@
 #include "engine/synthesis/AmbienceRenderer.h"
 #include "engine/model/RenderSettings.h"
 #include "plugin/SessionState.h"
+#include "plugin/ara/DocumentControllerImpl.h"
 
 #include <algorithm>
 #include <cmath>
@@ -387,7 +388,7 @@ private:
 //==============================================================================
 ToneFillPlaybackRenderer::ToneFillPlaybackRenderer (ARA::PlugIn::DocumentController* dc,
                                                     ProcessingLockInterface& lock)
-    : juce::ARAPlaybackRenderer (dc), lockInterface (lock)
+    : juce::ARAPlaybackRenderer (dc), lockInterface (lock), documentController_ (dc)
 {
 }
 
@@ -409,12 +410,22 @@ void ToneFillPlaybackRenderer::prepareToPlay (double sampleRateIn, int maxBlockI
             + " ch=" + juce::String (numChannels) + " started=" + juce::String ((int) analysisStarted.load()));
 
     // Kick off analysis once, from the first region's source (off the audio thread).
-    if (! analysisStarted.load() && state_ != nullptr)
+    if (! analysisStarted.load())
     {
         for (const auto playbackRegion : getPlaybackRegions())
         {
             if (auto* source = playbackRegion->getAudioModification()->getAudioSource())
             {
+                // Publish to the state the document controller shares for this source, so the
+                // editor sees us even when the host put it on a different instance (the usual
+                // case outside Reaper). Falls back to whatever didBindToARA handed us.
+                if (auto* dc = specialisedDocumentController (documentController_))
+                    if (auto shared = dc->stateForSource (source))
+                        state_ = std::move (shared);
+
+                if (state_ == nullptr)
+                    break;
+
                 analysisStarted.store (true);
                 araLog ("prepareToPlay: starting worker");
                 worker = std::make_unique<FillWorker> (

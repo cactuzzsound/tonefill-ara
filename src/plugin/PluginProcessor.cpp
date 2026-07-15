@@ -14,6 +14,7 @@
 #include <mutex>
 
 #if TONEFILL_ARA_AVAILABLE
+ #include "plugin/ara/DocumentControllerImpl.h"
  #include "plugin/ara/PlaybackRenderer.h"
 #endif
 
@@ -68,17 +69,71 @@ void PluginProcessor::didBindToARA() noexcept
 {
     juce::AudioProcessorARAExtension::didBindToARA(); // JUCE requires calling the base hook
 
-    // Give THIS instance's playback renderer our per-instance SessionState, so its background
-    // worker publishes the waveform / status / manual selection to OUR editor only.
+    pluginLog ("didBindToARA: roles playbackRenderer=" + juce::String ((int) isPlaybackRenderer())
+               + " editorRenderer=" + juce::String ((int) isEditorRenderer())
+               + " editorView=" + juce::String ((int) isEditorView()));
+
+    tryResolveSharedState();
+
+    // Only a starting point: the renderer re-resolves the shared state from the document
+    // controller in prepareToPlay, once it knows which audio source it renders.
     if (auto* renderer = getPlaybackRenderer<ara::ToneFillPlaybackRenderer>())
     {
-        renderer->setSessionState (sessionState_);
+        renderer->setSessionState (sessionStatePtr());
         pluginLog ("didBindToARA: wired SessionState to playback renderer");
     }
-    else
+}
+
+bool PluginProcessor::tryResolveSharedState()
+{
+    if (sharedState_ != nullptr)
+        return true;
+    if (! isBoundToARA())
+        return false;
+
+    auto sourceOfFirstRegion = [] (const auto& regions) -> const juce::ARAAudioSource*
     {
-        pluginLog ("didBindToARA: no playback renderer for this instance");
+        for (auto* region : regions)
+            if (auto* modification = region->getAudioModification())
+                if (auto* source = modification->getAudioSource())
+                    return source;
+        return nullptr;
+    };
+
+    // Whichever role this instance got, it can reach the document controller the instances share.
+    ARA::PlugIn::DocumentController* documentController = nullptr;
+    const juce::ARAAudioSource* source = nullptr;
+
+    if (auto* renderer = getPlaybackRenderer())
+    {
+        documentController = renderer->getDocumentController();
+        source             = sourceOfFirstRegion (renderer->getPlaybackRegions());
     }
+    else if (auto* renderer = getEditorRenderer())
+    {
+        documentController = renderer->getDocumentController();
+        source             = sourceOfFirstRegion (renderer->getPlaybackRegions());
+    }
+    else if (auto* view = getEditorView())
+    {
+        documentController = view->getDocumentController();
+    }
+
+    auto* dc = ara::specialisedDocumentController (documentController);
+    if (dc == nullptr)
+        return false;
+
+    // No region on this instance: fall back to the document's single audio source, which covers
+    // the usual one-clip-per-editor case in hosts that bind an editor-only instance.
+    auto resolved = source != nullptr ? dc->stateForSource (source) : dc->stateForSoleSource();
+    if (resolved == nullptr)
+        return false;
+
+    sharedState_ = std::move (resolved);
+    statePtr_.store (sharedState_.get(), std::memory_order_release);
+    pluginLog (juce::String ("resolved shared SessionState via ")
+               + (source != nullptr ? "region" : "sole source"));
+    return true;
 }
 #endif
 
@@ -235,11 +290,9 @@ void PluginProcessor::analyzeLearn()
                + " modelCh=" + juce::String (learnedModel_->numChannels));
     setGlobalLearned (learnedModel_); // share so a different Render instance can use it
     genHash_ = 0; genFillLen_ = 0; genFill_.clear(); // force regenerate from the new model
-    if (sessionState_ != nullptr)
-    {
-        sessionState_->learnSeconds.store (learnedModel_->learnMaterialSeconds);
-        sessionState_->phase.store (2);
-    }
+    auto& ss = sessionState();
+    ss.learnSeconds.store (learnedModel_->learnMaterialSeconds);
+    ss.phase.store (2);
 }
 
 std::uint64_t PluginProcessor::genParamHash() const
