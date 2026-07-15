@@ -79,7 +79,9 @@ cat > "$STAGE/distribution.xml" <<XML
 <installer-gui-script minSpecVersion="2">
     <title>ToneFill $VERSION</title>
     <organization>com.cactuzzsound</organization>
-    <options customize="allow" require-scripts="false" hostArchitectures="x86_64,arm64"/>
+    <!-- "always" opens the format checkboxes straight away. With "allow" they hide behind a
+         Customize button that reads as "you can't pick formats", which is the whole point here. -->
+    <options customize="always" require-scripts="false" hostArchitectures="x86_64,arm64"/>
     <domains enable_localSystem="true"/>
     <choices-outline>
 $AAX_CHOICE_LINE
