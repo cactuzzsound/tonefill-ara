@@ -4,7 +4,7 @@
 ; The workflow stages the built bundle into installer\windows\stage\ToneFill.vst3 first.
 
 #ifndef AppVersion
-  #define AppVersion "1.0.0"
+  #define AppVersion "1.1.0"
 #endif
 #define AppName "ToneFill"
 #define AppPublisher "cactuzz sound"
