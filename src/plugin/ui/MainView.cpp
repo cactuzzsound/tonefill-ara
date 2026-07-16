@@ -599,20 +599,27 @@ void MainView::timerCallback()
     // stamp the previous clip's knob values onto it -- a new clip would inherit the old settings.
     // Return this tick: getRawParameterValue may not reflect the just-set values yet, and mirroring
     // it back would clobber. The read-only UI (meters/wave/tips) catches up 66 ms later.
+    const bool realClip = (&ss != processor_.ownStatePtr());
     if (shownState_ != &ss)
     {
         shownState_ = &ss;
         if (waveWin_ != nullptr) waveWin_.reset();
-
-        const bool realClip = (&ss != processor_.ownStatePtr());
         if (realClip)
         {
-            // First resolved clip: seed its state from the current knobs (which may hold values
-            // restored from the project), so a single-clip reload isn't wiped to defaults. Every
-            // later clip switch loads that clip's own stored params into the knobs instead.
-            if (seededRealState_) { loadParamsFromState (ss); return; }
-            seededRealState_ = true;
+            // Load this clip's own parameters into the knobs: defaults for a fresh clip, or the
+            // values an ARA archive restore put there for a reloaded one. A plain (non-ARA) insert
+            // stays on ownState, so the knobs keep being driven straight from the APVTS instead.
+            loadParamsFromState (ss);
+            loadedEpoch_ = ss.paramsEpoch.load();
+            return;
         }
+    }
+    else if (realClip && ss.paramsEpoch.load() != loadedEpoch_)
+    {
+        // An ARA archive restore landed after we were already showing this clip: adopt its values.
+        loadParamsFromState (ss);
+        loadedEpoch_ = ss.paramsEpoch.load();
+        return;
     }
 
     bool changed = false;

@@ -88,7 +88,7 @@ private:
     std::unique_ptr<WaveformWindow> waveWin_;
     std::unique_ptr<juce::FileChooser> chooser_;
     const SessionState* shownState_ = nullptr; // detect the editor re-pointing to another clip
-    bool seededRealState_ = false;             // first resolved clip seeds from APVTS, not vice-versa
+    int  loadedEpoch_ = -1;                    // paramsEpoch last loaded; reload if a restore bumps it
 
     SessionState::WaveData wave_;
     float meterDb_ = -120.0f;

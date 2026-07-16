@@ -50,7 +50,9 @@ protected:
 
     juce::ARAPlaybackRenderer* doCreatePlaybackRenderer() noexcept override;
 
-    // Archive hooks are pure-virtual. No-op for now. TODO(TF-801): persist AmbienceModel.
+    // Persist each clip's parameters into the ARA archive, keyed by the audio source's persistent
+    // ID, so per-clip settings survive project save/reload. (The AmbienceModel itself is still
+    // recomputed on load, not archived.)
     bool doStoreObjectsToStream (juce::ARAOutputStream& output,
                                  const juce::ARAStoreObjectsFilter* filter) override;
     bool doRestoreObjectsFromStream (juce::ARAInputStream& input,
