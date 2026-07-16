@@ -36,6 +36,7 @@ private:
     void exportWav();
     void updateEmphasis();
     void pushSelections();                 // selections_ -> SessionState (source-sample ranges)
+    void loadParamsFromState (SessionState& ss); // clip switch: SessionState -> knobs (per-clip params)
     int  xToSample (int x) const;          // waveform x -> source sample
     float sampleToX (int sample) const;    // source sample -> waveform x
     void drawGroupIcon (juce::Graphics&, juce::Rectangle<float> box, int icon, juce::Colour) const;
@@ -86,6 +87,8 @@ private:
 
     std::unique_ptr<WaveformWindow> waveWin_;
     std::unique_ptr<juce::FileChooser> chooser_;
+    const SessionState* shownState_ = nullptr; // detect the editor re-pointing to another clip
+    bool seededRealState_ = false;             // first resolved clip seeds from APVTS, not vice-versa
 
     SessionState::WaveData wave_;
     float meterDb_ = -120.0f;

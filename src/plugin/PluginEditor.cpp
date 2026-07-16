@@ -3,7 +3,11 @@
 namespace tonefill::plugin
 {
 PluginEditor::PluginEditor (PluginProcessor& p)
-    : juce::AudioProcessorEditor (&p), processor_ (p), mainView_ (p)
+    : juce::AudioProcessorEditor (&p),
+     #if TONEFILL_ARA_AVAILABLE
+      juce::AudioProcessorEditorARAExtension (&p),
+     #endif
+      processor_ (p), mainView_ (p)
 {
     addAndMakeVisible (mainView_);
     setResizable (true, true);

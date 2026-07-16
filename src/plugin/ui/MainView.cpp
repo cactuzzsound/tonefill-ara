@@ -542,16 +542,78 @@ void MainView::resized()
     dataArea_ = bc.removeFromTop (16);
 }
 
+void MainView::loadParamsFromState (SessionState& ss)
+{
+    auto& apvts = processor_.parameters().apvts;
+    auto setF = [&apvts] (const juce::String& id, float v)
+    {
+        if (auto* p = apvts.getParameter (id))
+            p->setValueNotifyingHost (p->convertTo0to1 (v));
+    };
+    auto setB = [&apvts] (const juce::String& id, bool v)
+    {
+        if (auto* p = apvts.getParameter (id))
+            p->setValueNotifyingHost (v ? 1.0f : 0.0f);
+    };
+
+    // Only the parameters the timer mirrors the other way, so load/store stay symmetric.
+    setF (IDs::threshold,    ss.threshold.load());
+    setF (IDs::speechReject, ss.speechReject.load());
+    setF (IDs::fragment,     ss.fragment.load());
+    setF (IDs::blend,        ss.blend.load());
+    setF (IDs::randomness,   ss.randomness.load());
+    setF (IDs::minFill,      ss.minFill.load());
+    setF (IDs::flatness,     ss.flatness.load());
+    setB (IDs::paulStretch,  ss.paulStretch.load());
+    setF (IDs::outputGain,   juce::jlimit (-24.0f, 24.0f, juce::Decibels::gainToDecibels (ss.outputGain.load())));
+    setF (IDs::renderLength, ss.renderLength.load());
+    setB (IDs::normEnabled,  ss.normalizeEnabled.load());
+    setF (IDs::normTarget,   ss.normalizeTarget.load());
+    setB (IDs::normUnit,     ss.normalizeLufs.load());
+    setB (IDs::wholeFile,    ss.wholeFile.load());
+    setB (IDs::statistical,  ss.statisticalMode.load());
+    setB (IDs::hissFilter,   ss.hissFilter.load());
+    setF (IDs::hissFreq,     ss.hissFreq.load());
+    setF (IDs::hissQ,        ss.hissQ.load());
+
+    // Auto/Manual is not an APVTS parameter (it drives the waveform selection UI).
+    manualMode_ = ss.manualMode.load();
+    autoBtn_.setToggleState   (! manualMode_, juce::dontSendNotification);
+    manualBtn_.setToggleState (  manualMode_, juce::dontSendNotification);
+}
+
 void MainView::timerCallback()
 {
    #if TONEFILL_ARA_AVAILABLE
-    // Retry until it sticks: hosts attach the region after binding, and until we find the state
-    // shared with the renderer's instance the knobs below would write somewhere nobody reads.
-    processor_.tryResolveSharedState();
+    // Follow the host's clip selection: this editor is one persistent instance the host re-points
+    // at whichever clip is selected. Until it resolves, the knobs below would write where no worker
+    // reads; after a clip switch, they must retarget the newly selected clip's state.
+    processor_.tryResolveSharedState (true);
    #endif
 
     auto& apvts = processor_.parameters().apvts;
     auto& ss = processor_.sessionState();
+
+    // The editor re-pointed at another clip (one persistent editor instance follows the host's
+    // selection). Load THIS clip's parameters into the knobs, otherwise the mirror below would
+    // stamp the previous clip's knob values onto it -- a new clip would inherit the old settings.
+    // Return this tick: getRawParameterValue may not reflect the just-set values yet, and mirroring
+    // it back would clobber. The read-only UI (meters/wave/tips) catches up 66 ms later.
+    if (shownState_ != &ss)
+    {
+        shownState_ = &ss;
+        if (waveWin_ != nullptr) waveWin_.reset();
+
+        const bool realClip = (&ss != processor_.ownStatePtr());
+        if (realClip)
+        {
+            // First resolved clip: seed its state from the current knobs (which may hold values
+            // restored from the project), so a single-clip reload isn't wiped to defaults. Every
+            // later clip switch loads that clip's own stored params into the knobs instead.
+            if (seededRealState_) { loadParamsFromState (ss); return; }
+            seededRealState_ = true;
+        }
+    }
 
     bool changed = false;
     auto mirror = [&changed] (std::atomic<float>& dst, float v) { if (std::abs (dst.load() - v) > 1.0e-4f) { dst.store (v); changed = true; } };

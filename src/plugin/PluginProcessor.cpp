@@ -84,10 +84,8 @@ void PluginProcessor::didBindToARA() noexcept
     }
 }
 
-bool PluginProcessor::tryResolveSharedState()
+bool PluginProcessor::tryResolveSharedState (bool canReadSelection)
 {
-    if (sharedState_ != nullptr)
-        return true;
     if (! isBoundToARA())
         return false;
 
@@ -103,36 +101,75 @@ bool PluginProcessor::tryResolveSharedState()
     // Whichever role this instance got, it can reach the document controller the instances share.
     ARA::PlugIn::DocumentController* documentController = nullptr;
     const juce::ARAAudioSource* source = nullptr;
+    bool followsSelection = false;
 
-    if (auto* renderer = getPlaybackRenderer())
+    // The editor is one persistent instance; the host re-points it at the selected clip. Read the
+    // current view selection so a second clip stops showing the first clip's state. getViewSelection
+    // requires an open editor UI, so only from the editor timer (canReadSelection).
+    if (canReadSelection)
     {
-        documentController = renderer->getDocumentController();
-        source             = sourceOfFirstRegion (renderer->getPlaybackRegions());
+        if (auto* view = getEditorView())
+        {
+            documentController = view->getDocumentController();
+            followsSelection   = true;
+            source             = sourceOfFirstRegion (
+                view->getViewSelection().template getEffectivePlaybackRegions<juce::ARAPlaybackRegion>());
+        }
     }
-    else if (auto* renderer = getEditorRenderer())
+
+    if (documentController == nullptr)
     {
-        documentController = renderer->getDocumentController();
-        source             = sourceOfFirstRegion (renderer->getPlaybackRegions());
-    }
-    else if (auto* view = getEditorView())
-    {
-        documentController = view->getDocumentController();
+        if (auto* renderer = getPlaybackRenderer())
+        {
+            documentController = renderer->getDocumentController();
+            source             = sourceOfFirstRegion (renderer->getPlaybackRegions());
+        }
+        else if (auto* renderer = getEditorRenderer())
+        {
+            documentController = renderer->getDocumentController();
+            source             = sourceOfFirstRegion (renderer->getPlaybackRegions());
+        }
+        else if (auto* view = getEditorView())
+        {
+            documentController = view->getDocumentController();
+        }
     }
 
     auto* dc = ara::specialisedDocumentController (documentController);
     if (dc == nullptr)
         return false;
 
-    // No region on this instance: fall back to the document's single audio source, which covers
-    // the usual one-clip-per-editor case in hosts that bind an editor-only instance.
-    auto resolved = source != nullptr ? dc->stateForSource (source) : dc->stateForSoleSource();
+    // A renderer instance renders one fixed region: resolve once and latch.
+    if (! followsSelection && sharedState_ != nullptr)
+        return true;
+
+    if (source == nullptr)
+    {
+        // Empty selection, or an editor-only instance with no region: keep what we show rather than
+        // blank the GUI, and on first resolve fall back to the document's single audio source.
+        if (sharedState_ != nullptr)
+            return true;
+        auto sole = dc->stateForSoleSource();
+        if (sole == nullptr)
+            return false;
+        resolvedSource_ = nullptr;
+        sharedState_    = std::move (sole);
+        statePtr_.store (sharedState_.get(), std::memory_order_release);
+        return true;
+    }
+
+    if (source == resolvedSource_)
+        return true; // already showing this clip
+
+    auto resolved = dc->stateForSource (source);
     if (resolved == nullptr)
         return false;
 
-    sharedState_ = std::move (resolved);
+    resolvedSource_ = source;
+    sharedState_    = std::move (resolved);
     statePtr_.store (sharedState_.get(), std::memory_order_release);
-    pluginLog (juce::String ("resolved shared SessionState via ")
-               + (source != nullptr ? "region" : "sole source"));
+    pluginLog (followsSelection ? "re-pointed SessionState to selected source"
+                                : "resolved shared SessionState via region");
     return true;
 }
 #endif

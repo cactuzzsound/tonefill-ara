@@ -82,14 +82,20 @@ public:
     SessionState&                 sessionState()    noexcept { return *statePtr_.load (std::memory_order_acquire); }
     std::shared_ptr<SessionState> sessionStatePtr() noexcept { return sharedState_ != nullptr ? sharedState_ : ownState_; }
 
+    // The pre-ARA placeholder state. The editor uses it to tell "still unbound / plain insert"
+    // (sessionState() == ownState) from "showing a resolved ARA clip".
+    const SessionState*           ownStatePtr() const noexcept { return ownState_.get(); }
+
 #if TONEFILL_ARA_AVAILABLE
     // Called by JUCE once this instance is bound to ARA.
     void didBindToARA() noexcept override;
 
-    // Point this instance at the SessionState shared for our audio source. Cheap no-op once
-    // resolved; the editor retries on its timer because a host may attach the region after
-    // binding. Message thread only.
-    bool tryResolveSharedState();
+    // Point this instance at the SessionState shared for its audio source. The editor calls this
+    // every timer tick with canReadSelection=true: it is a single persistent instance the host
+    // re-points at whichever clip is selected, so it FOLLOWS the view selection rather than
+    // latching the first clip. Renderer instances render one fixed region and latch once.
+    // Message thread only.
+    bool tryResolveSharedState (bool canReadSelection = false);
 #endif
 
     // TODO(ARA): expose the ARA document controller factory via JUCE ARA support. With
@@ -112,6 +118,9 @@ private:
     std::shared_ptr<SessionState>  ownState_ { std::make_shared<SessionState>() };
     std::shared_ptr<SessionState>  sharedState_;                    // from the document controller
     std::atomic<SessionState*>     statePtr_ { ownState_.get() };   // what sessionState() returns
+#if TONEFILL_ARA_AVAILABLE
+    const juce::ARAAudioSource*    resolvedSource_ = nullptr;       // clip statePtr_ currently shows
+#endif
 
     // Non-ARA LEARN / GENERATE path (Pro Tools AudioSuite, or any plain insert). Learn mode:
     // capture + analyze the selection into learnedModel_ (output = passthrough). Generate mode:
