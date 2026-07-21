@@ -40,6 +40,9 @@ public:
         static constexpr auto statistical    = "statistical";    // Statistical selection (Design §E) vs Classic
         static constexpr auto spectral       = "spectral";       // Spectral Mosaic: per-band select + synth
         static constexpr auto spectralBands  = "spectralBands";  // Spectral: number of analysis bands
+        static constexpr auto spectralAdv    = "spectralAdv";    // Spectral: advanced (choose band range)
+        static constexpr auto spectralLo     = "spectralLo";     // Spectral advanced: low edge (Hz)
+        static constexpr auto spectralHi     = "spectralHi";     // Spectral advanced: high edge (Hz)
         static constexpr auto bypass         = "bypass";         // A/B monitor: source vs room tone
         static constexpr auto learnMode      = "learnMode";      // AudioSuite: learn from selection vs generate
         static constexpr auto renderLength   = "renderLength";   // Export WAV length, seconds

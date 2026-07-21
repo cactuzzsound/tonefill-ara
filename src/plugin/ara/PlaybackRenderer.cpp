@@ -419,8 +419,14 @@ public:
                     const int nBands = juce::jlimit (3, 12, ss.spectralBands.load());
                     std::vector<double> edges;
                     {
-                        const int nEdges = nBands - 1; // 150 and 8000 are the first/last edges
-                        const double lo = 150.0, hi = 8000.0;
+                        const int nEdges = nBands - 1; // lo and hi are the first/last edges
+                        // Advanced: user-chosen band range; otherwise the default 150..8000 Hz span.
+                        double lo = 150.0, hi = 8000.0;
+                        if (ss.spectralAdvanced.load())
+                        {
+                            lo = juce::jlimit (20.0, sampleRate * 0.45, (double) ss.spectralLoHz.load());
+                            hi = juce::jlimit (lo * 1.2, sampleRate * 0.49, (double) ss.spectralHiHz.load());
+                        }
                         for (int e = 0; e < nEdges; ++e)
                         {
                             const double t = nEdges > 1 ? (double) e / (double) (nEdges - 1) : 0.0;

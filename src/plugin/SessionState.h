@@ -37,6 +37,9 @@ struct SessionState
     std::atomic<bool>          statisticalMode { false }; // Statistical selection (Design §E) vs Classic
     std::atomic<bool>          spectralMode { false };    // Spectral Mosaic: per-band select + synth + sum
     std::atomic<int>           spectralBands { 7 };       // Spectral: number of analysis bands (3..12)
+    std::atomic<bool>          spectralAdvanced { false };// Spectral: advanced band-range control
+    std::atomic<float>         spectralLoHz { 150.0f };   // advanced: low band edge (Hz)
+    std::atomic<float>         spectralHiHz { 8000.0f };  // advanced: high band edge (Hz)
     std::atomic<bool>          bypass { false };          // A/B monitor: play the source instead of the fill
     std::atomic<bool>          hissFilter { false };  // Enhance-only live HF de-hiss (audio thread)
     std::atomic<float>         hissFreq { 9000.0f };  // de-hiss corner (Hz)

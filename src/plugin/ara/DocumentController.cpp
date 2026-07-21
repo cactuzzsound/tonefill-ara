@@ -13,7 +13,7 @@ namespace
 // can be skipped and a future format extended without desyncing the stream.
 constexpr int kArchiveMagic  = 0x54464152; // 'TFAR'
 constexpr int kArchiveVer    = 1;
-constexpr int kParamBlockVer = 2; // v2 appended spectralMode + spectralBands; v1 blocks still read
+constexpr int kParamBlockVer = 3; // v2 = +spectralMode/+spectralBands; v3 = +spectralAdvanced/Lo/Hi
 
 void writeParamBlock (juce::OutputStream& os, plugin::SessionState& ss)
 {
@@ -45,6 +45,9 @@ void writeParamBlock (juce::OutputStream& os, plugin::SessionState& ss)
 
     os.writeBool (ss.spectralMode.load());  // v2+
     os.writeInt  (ss.spectralBands.load()); // v2+
+    os.writeBool  (ss.spectralAdvanced.load()); // v3+
+    os.writeFloat (ss.spectralLoHz.load());
+    os.writeFloat (ss.spectralHiHz.load());
 }
 
 bool readParamBlock (juce::InputStream& is, plugin::SessionState& ss)
@@ -83,6 +86,12 @@ bool readParamBlock (juce::InputStream& is, plugin::SessionState& ss)
     {
         ss.spectralMode.store (is.readBool());
         ss.spectralBands.store (juce::jlimit (3, 12, is.readInt()));
+    }
+    if (ver >= 3)
+    {
+        ss.spectralAdvanced.store (is.readBool());
+        ss.spectralLoHz.store (juce::jlimit (20.0f, 20000.0f, is.readFloat()));
+        ss.spectralHiHz.store (juce::jlimit (20.0f, 22000.0f, is.readFloat()));
     }
 
     ss.paramsEpoch.fetch_add (1);  // editor reloads the knobs
