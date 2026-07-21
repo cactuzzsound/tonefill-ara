@@ -396,12 +396,47 @@ public:
                         auto bands = tonefill::dsp::splitBandsLR (mono.data(), srcN, sampleRate, edges);
                         std::vector<float> accMono ((std::size_t) outN, 0.0f);
 
+                        // Target timbre = the CLEAN room tone's spectral balance, measured full-band on
+                        // the audio the broadband analysis already selected -- NOT the whole source's
+                        // band energy, which is dominated by dialogue in the mid bands and would pump
+                        // those bands up (too loud / wrong colour). Split the clean reference into the
+                        // same bands and match each synthesized band to its clean-reference level.
+                        std::vector<float> targetBandRms ((std::size_t) nBands, 0.0f);
+                        bool haveCleanRef = false;
+                        {
+                            const auto& cap = model->cleanAudioPerChannel;
+                            if (! cap.empty() && ! cap[0].empty())
+                            {
+                                const int cn = (int) cap[0].size();
+                                std::vector<float> cleanMono ((std::size_t) cn, 0.0f);
+                                for (const auto& cc : cap)
+                                    for (int i = 0; i < juce::jmin (cn, (int) cc.size()); ++i)
+                                        cleanMono[(std::size_t) i] += cc[(std::size_t) i];
+                                if (cap.size() > 1) for (auto& v : cleanMono) v /= (float) cap.size();
+
+                                auto cleanBands = tonefill::dsp::splitBandsLR (cleanMono.data(), cn, sampleRate, edges);
+                                for (std::size_t bi = 0; bi < cleanBands.size() && bi < targetBandRms.size(); ++bi)
+                                {
+                                    double e = 0.0; for (float v : cleanBands[bi]) e += (double) v * v;
+                                    targetBandRms[bi] = (float) std::sqrt (e / juce::jmax (1, (int) cleanBands[bi].size()));
+                                }
+                                haveCleanRef = true;
+                            }
+                        }
+
                         for (std::size_t bi = 0; bi < bands.size() && ! cancel.load(); ++bi)
                         {
                             const auto& band = bands[bi];
-                            double se = 0.0; for (float v : band) se += (double) v * v;
-                            const float srcRms = (float) std::sqrt (se / juce::jmax (1, srcN));
-                            if (srcRms < 1.0e-7f) continue; // silent band
+
+                            // Gain target: the clean room tone's level in this band. Fall back to the
+                            // whole-band level only if no clean reference was found.
+                            float target = (bi < targetBandRms.size()) ? targetBandRms[bi] : 0.0f;
+                            if (! haveCleanRef)
+                            {
+                                double se = 0.0; for (float v : band) se += (double) v * v;
+                                target = (float) std::sqrt (se / juce::jmax (1, srcN));
+                            }
+                            if (target < 1.0e-7f) continue; // this band is silent in the room tone
 
                             juce::AudioBuffer<float> bandBuf (1, srcN);
                             std::copy (band.begin(), band.end(), bandBuf.getWritePointer (0));
@@ -415,11 +450,11 @@ public:
                             if (! br.ok() || br.value().channels.empty()) continue;
                             const auto& bc = br.value().channels[0];
 
-                            // Match each band back to the source band's level, then sum -> the
-                            // composite keeps the room's spectral balance (LR bands sum flat).
+                            // Scale the synthesized band to the clean-reference band level, then sum ->
+                            // the composite reproduces the room tone's spectral balance (LR bands sum flat).
                             double oe = 0.0; for (float v : bc) oe += (double) v * v;
                             const float outRms = (float) std::sqrt (oe / juce::jmax (1, (int) bc.size()));
-                            const float g = outRms > 1.0e-9f ? srcRms / outRms : 0.0f;
+                            const float g = outRms > 1.0e-9f ? target / outRms : 0.0f;
                             const int m2 = juce::jmin (outN, (int) bc.size());
                             for (int i = 0; i < m2; ++i) accMono[(std::size_t) i] += bc[(std::size_t) i] * g;
                         }
