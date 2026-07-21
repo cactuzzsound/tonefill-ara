@@ -32,4 +32,6 @@ constexpr const char* kParamNormTarget = "normtgt";  // Normalize target   -60..
 constexpr const char* kParamNormLufs   = "normluf";  // 1 = LUFS, 0 = dBFS (peak)
 constexpr const char* kParamSeed       = "seed";     // Variation seed     1..100 (nudge = Regenerate)
 constexpr const char* kParamManual     = "manual";   // 1 = learn from manual regions on the waveform
+constexpr const char* kParamSpectral   = "spectral"; // Spectral Mosaic: per-band select + synth on/off
+constexpr const char* kParamBands      = "bands";    // Spectral: number of analysis bands  3..12
 } // namespace tonefill_aax

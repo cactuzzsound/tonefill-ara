@@ -12,6 +12,7 @@
 #include "engine/model/RenderSettings.h"
 #include "core/DiagnosticsLogger.h"
 #include "dsp/Loudness.h"
+#include "dsp/SpectralBands.h"
 
 #include <juce_audio_basics/juce_audio_basics.h>
 
@@ -75,6 +76,8 @@ struct RenderParams
 {
     double sr = 48000.0;
     bool  manual = false, experimental = false, enhance = false, normOn = false, normLufs = true;
+    bool  spectral = false;
+    int   bands = 7;
     float clean = 0, voice = 0, flatness = 0, minFill = 2, chunk = 0, xfade = 0, smooth = 0;
     double seed = 1, normTarget = -16.0;
     std::vector<std::pair<int, int>> manualRanges;
@@ -161,13 +164,13 @@ std::shared_ptr<FillResult> renderImpl (const tonefill::engine::model::AmbienceM
     tonefill::engine::model::RenderSettings s;
     s.mode        = tonefill::engine::model::Mode::Ambience;
     s.paulStretch = p.enhance;
-    s.fragmentMs  = 200.0f + p.chunk * 2800.0f;
+    s.fragmentMs  = 700.0f; // Chunk Size removed (grainCloud caps to srcLen/4; join machinery hides it)
     s.blendFrac   = 0.05f + p.xfade * 0.45f;
     s.randomness  = p.smooth;
     s.seed        = (std::uint64_t) juce::jmax (1.0, p.seed);
 
     const double availSec = (double) model->learnMaterialSeconds;
-    const double loopSec  = juce::jlimit (15.0, 60.0, availSec * 4.0);
+    const double loopSec  = juce::jlimit (15.0, 120.0, availSec * 4.0);
     const int loopLen = (int) (loopSec * p.sr);
     const int xf      = (int) (0.25 * p.sr);
     s.targetSampleRate      = p.sr;
@@ -213,6 +216,128 @@ std::shared_ptr<FillResult> renderImpl (const tonefill::engine::model::AmbienceM
     asLog ("fill: len=" + juce::String (fr->len) + " ch=" + juce::String ((int) fr->fill.size()));
     return fr;
 }
+
+// Spectral Mosaic (AAX): split the source into power-complementary bands, select + synthesize each
+// band from its own clean material, gain-match each band to the clean room tone's level in that band,
+// and sum. Mirrors the ARA path. Reuses analyseImpl per band (sh=nullptr so it never touches the UI).
+std::shared_ptr<FillResult>
+renderSpectralImpl (const tonefill::engine::model::AmbienceModelPtr& model,
+                    const juce::AudioBuffer<float>& raw, const RenderParams& p)
+{
+    if (model == nullptr) return nullptr;
+
+    const double availSec = (double) model->learnMaterialSeconds;
+    const double loopSec  = juce::jlimit (15.0, 120.0, availSec * 4.0);
+    const int loopLen = (int) (loopSec * p.sr);
+    const int xf      = (int) (0.25 * p.sr);
+    const int outN    = loopLen + xf;
+    const int srcN    = raw.getNumSamples();
+    const int effCh   = juce::jmax (1, model->numChannels);
+    if (srcN <= 0 || outN <= 0) return nullptr;
+
+    // Band edges: geometric across 150..8000 Hz from the band count.
+    const int nBands = juce::jlimit (3, 12, p.bands);
+    std::vector<double> edges;
+    { const int nEdges = nBands - 1; const double lo = 150.0, hi = 8000.0;
+      for (int e = 0; e < nEdges; ++e)
+      { const double t = nEdges > 1 ? (double) e / (double) (nEdges - 1) : 0.0;
+        edges.push_back (lo * std::pow (hi / lo, t)); } }
+
+    // Mono-collapse the source and split it.
+    std::vector<float> mono ((std::size_t) srcN, 0.0f);
+    const int lc = juce::jmax (1, raw.getNumChannels());
+    for (int c = 0; c < lc; ++c)
+    { const float* s = raw.getReadPointer (c); for (int i = 0; i < srcN; ++i) mono[(std::size_t) i] += s[i]; }
+    if (lc > 1) for (auto& v : mono) v /= (float) lc;
+    auto bands = tonefill::dsp::splitBands (mono.data(), srcN, p.sr, edges);
+
+    // Target timbre = the clean room tone's per-band level (measured full-spectrum on the material the
+    // broadband analysis selected), NOT the whole source's band energy (dialogue-weighted in the mids).
+    std::vector<float> targetBandRms ((std::size_t) nBands, 0.0f);
+    bool haveCleanRef = false;
+    { const auto& cap = model->cleanAudioPerChannel;
+      if (! cap.empty() && ! cap[0].empty())
+      { const int cn = (int) cap[0].size();
+        std::vector<float> cm ((std::size_t) cn, 0.0f);
+        for (const auto& cc : cap) for (int i = 0; i < juce::jmin (cn, (int) cc.size()); ++i) cm[(std::size_t) i] += cc[(std::size_t) i];
+        if (cap.size() > 1) for (auto& v : cm) v /= (float) cap.size();
+        auto cb = tonefill::dsp::splitBands (cm.data(), cn, p.sr, edges);
+        for (std::size_t bi = 0; bi < cb.size() && bi < targetBandRms.size(); ++bi)
+        { double e = 0.0; for (float v : cb[bi]) e += (double) v * v;
+          targetBandRms[bi] = (float) std::sqrt (e / juce::jmax (1, (int) cb[bi].size())); }
+        haveCleanRef = true; } }
+
+    std::atomic<bool> cancel { false };
+    tonefill::engine::synthesis::AmbienceRenderer renderer;
+    std::vector<float> accMono ((std::size_t) outN, 0.0f);
+
+    for (std::size_t bi = 0; bi < bands.size(); ++bi)
+    {
+        const auto& band = bands[bi];
+        float target = (bi < targetBandRms.size()) ? targetBandRms[bi] : 0.0f;
+        if (! haveCleanRef)
+        { double se = 0.0; for (float v : band) se += (double) v * v;
+          target = (float) std::sqrt (se / juce::jmax (1, srcN)); }
+        if (target < 1.0e-7f) continue;
+
+        juce::AudioBuffer<float> bandBuf (1, srcN);
+        std::copy (band.begin(), band.end(), bandBuf.getWritePointer (0));
+        auto bandModel = analyseImpl (p, bandBuf, nullptr); // no UI publish
+        if (bandModel == nullptr) continue;
+
+        tonefill::engine::model::RenderSettings s;
+        s.mode        = tonefill::engine::model::Mode::Ambience;
+        s.paulStretch = p.enhance;
+        s.fragmentMs  = 700.0f;
+        s.blendFrac   = 0.05f + p.xfade * 0.45f;
+        s.randomness  = p.smooth;
+        s.seed        = ((std::uint64_t) juce::jmax (1.0, p.seed)) ^ (0x9E3779B97F4A7C15ULL * (std::uint64_t) (bi + 1));
+        s.targetSampleRate      = p.sr;
+        s.targetChannels        = 1;
+        s.targetDurationSamples = outN;
+        auto out = renderer.render (*bandModel, s, cancel);
+        if (! out.ok() || out.value().channels.empty()) continue;
+        const auto& bc = out.value().channels[0];
+
+        double oe = 0.0; for (float v : bc) oe += (double) v * v;
+        const float outRms = (float) std::sqrt (oe / juce::jmax (1, (int) bc.size()));
+        const float g = outRms > 1.0e-9f ? target / outRms : 0.0f;
+        const int m2 = juce::jmin (outN, (int) bc.size());
+        for (int i = 0; i < m2; ++i) accMono[(std::size_t) i] += bc[(std::size_t) i] * g;
+    }
+
+    // Fan to channels, fold the loop seamless, normalize -- same tail handling as renderImpl.
+    std::vector<std::vector<float>> chans ((std::size_t) effCh, accMono);
+    for (auto& c : chans)
+        if ((int) c.size() >= loopLen + xf)
+        {
+            for (int i = 0; i < xf; ++i)
+            { const float gg = (float) i / (float) (xf - 1) * 1.5707963f;
+              c[(std::size_t) i] = c[(std::size_t) (loopLen + i)] * std::cos (gg) + c[(std::size_t) i] * std::sin (gg); }
+            c.resize ((std::size_t) loopLen);
+        }
+    if (chans.empty() || chans[0].empty()) return nullptr;
+
+    if (p.normOn)
+    {
+        const bool lufs = p.normLufs;
+        const float measured = lufs ? tonefill::dsp::integratedLufs (chans, p.sr) : tonefill::dsp::peakDbfs (chans);
+        if (measured > -119.0f)
+        {
+            float gainDb = (float) p.normTarget - measured;
+            if (lufs) { const float peakDb = tonefill::dsp::peakDbfs (chans); const float np = peakDb + gainDb; if (np > -1.0f) gainDb -= (np + 1.0f); }
+            const float g = std::pow (10.0f, gainDb / 20.0f);
+            if (std::fabs (g - 1.0f) > 1.0e-4f) for (auto& c : chans) for (auto& v : c) v *= g;
+        }
+    }
+
+    auto fr = std::make_shared<FillResult>();
+    fr->fill = std::move (chans);
+    fr->len  = (long long) fr->fill[0].size();
+    fr->rSig = p.rSig;
+    asLog ("spectral fill: bands=" + juce::String (nBands) + " len=" + juce::String (fr->len));
+    return fr;
+}
 } // namespace
 
 //==============================================================================
@@ -255,7 +380,8 @@ public:
             }
             if (mModel != nullptr && job.rSig != mDoneRSig)
             {
-                if (auto fr = renderImpl (mModel, job))
+                auto fr = job.spectral ? renderSpectralImpl (mModel, *raw, job) : renderImpl (mModel, job);
+                if (fr)
                 {
                     const juce::ScopedLock l (mPubLock);
                     mFill = fr;
@@ -391,6 +517,8 @@ AAX_Result ToneFillAS_HostProcessor::RenderAudio (const float* const inAudioIns[
     pr.smooth   = (float) readNorm (kParamSmooth);
     pr.seed     = readReal (kParamSeed, 1.0, 100.0);
     pr.normTarget = readReal (kParamNormTarget, -60.0, 0.0);
+    pr.spectral = readNorm (kParamSpectral) > 0.5;
+    pr.bands    = (int) std::lround (readReal (kParamBands, 3.0, 12.0));
     if (sh != nullptr) { const juce::SpinLock::ScopedLockType l (sh->lock); pr.manualRanges = sh->manualRanges; }
 
     long long manHash = pr.manual ? 1 : 0;
@@ -398,9 +526,10 @@ AAX_Result ToneFillAS_HostProcessor::RenderAudio (const float* const inAudioIns[
     char asig[256], rsig[160];
     std::snprintf (asig, sizeof (asig), "%s|%.4f %.4f %.4f %.4f %d|%lld", mRawSig.c_str(),
                    pr.clean, pr.voice, pr.flatness, pr.minFill, pr.experimental ? 1 : 0, manHash);
-    std::snprintf (rsig, sizeof (rsig), "%d %.4f %.4f %.4f %.0f|%d %.4f %d",
+    std::snprintf (rsig, sizeof (rsig), "%d %.4f %.4f %.4f %.0f|%d %.4f %d|%d %d",
                    pr.enhance ? 1 : 0, pr.chunk, pr.xfade, pr.smooth, pr.seed,
-                   pr.normOn ? 1 : 0, pr.normTarget, pr.normLufs ? 1 : 0);
+                   pr.normOn ? 1 : 0, pr.normTarget, pr.normLufs ? 1 : 0,
+                   pr.spectral ? 1 : 0, pr.bands);
     pr.aSig = asig; pr.rSig = rsig;
 
     // Submit to the worker when anything relevant changed.

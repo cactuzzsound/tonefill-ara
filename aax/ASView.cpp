@@ -20,6 +20,7 @@ juce::String ASView::format (Kind k, double v) // v = normalized [0,1]
         case KFreq:    return juce::String ((int) std::lround (3000.0 + v * 12000.0)) + " Hz";
         case KQ:       return juce::String (0.3 + v * 1.7, 2);
         case KNormTgt: return juce::String (-60.0 + v * 60.0, 1);
+        case KBands:   return juce::String ((int) std::lround (3.0 + v * 9.0));
         case KPct:
         default:       return juce::String ((int) std::lround (v * 100.0)) + " %";
     }
@@ -73,7 +74,7 @@ ASView::ASView (Bridge bridge) : bridge_ (std::move (bridge))
     addKnob (kParamVoice,    "Voice Reject", KPct,     orange, "How hard to exclude voice / breaths / mouth noise. Higher = cleaner room tone.");
     addKnob (kParamMinFill,  "Min Fill",     KMinFill, orange, "Minimum length a stable fragment must have to be used. Longer = fewer, more consistent chunks and fewer audible joins.");
     addKnob (kParamFlatness, "Flatness",     KPct,     purple, "How strict the stationarity requirement is. Higher = only very steady stretches, so the fill avoids audible jumps.");
-    addKnob (kParamChunk,    "Chunk Size",   KPct,     purple, "Length of each real chunk taken from the source. Longer = more natural texture, shorter = smoother but more repetitive.");
+    addKnob (kParamBands,    "Bands",        KBands,   purple, "Spectral only: how many frequency bands the source is split into. Fewer = wider bands, more = narrower.");
     addKnob (kParamXfade,    "Crossfade",    KPct,     purple, "How much neighbouring chunks overlap and blend. Higher = smoother joins.");
     addKnob (kParamSmooth,   "Smoothness",   KPct,     purple, "Enhance only: resynthesis window size. Higher = smoother, more diffuse; lower keeps more fine texture.");
     addKnob (kParamGain,     "Output",       KGain,    orange, "Output volume, in dB. Bypassed while Normalize is on.");
@@ -87,12 +88,15 @@ ASView::ASView (Bridge bridge) : bridge_ (std::move (bridge))
     addToggle (kParamNormOn,  "Normalize", "Bake the output to a fixed loudness target, measured on the actual rendered length.");
     addToggle (kParamNormLufs, "LUFS", "LUFS = integrated loudness (EBU R128). Off = dBFS peak.");
 
-    // Classic / Experimental segmented pair (drives the statistical-selection param).
-    for (auto* b : { &classicBtn_, &expBtn_ }) { b->setClickingTogglesState (false); addAndMakeVisible (*b); }
+    // Classic / Experimental / Spectral mode group (mutually exclusive; drives the statistical +
+    // spectral params). Classic/Experimental pick the selection engine; Spectral is the per-band mosaic.
+    for (auto* b : { &classicBtn_, &expBtn_, &spectralBtn_ }) { b->setClickingTogglesState (false); addAndMakeVisible (*b); }
     classicBtn_.setTooltip ("Classic selection: the tuned gate stack (default).");
     expBtn_.setTooltip ("Experimental selection: weighted per-frame scoring. A/B against Classic by ear.");
-    classicBtn_.onClick = [this] { bridge_.setNorm (kParamExperim, 0.0); };
-    expBtn_.onClick     = [this] { bridge_.setNorm (kParamExperim, 1.0); };
+    spectralBtn_.setTooltip ("Spectral: split into frequency bands, find clean room tone per band and recombine. The Bands knob sets how many.");
+    classicBtn_.onClick  = [this] { bridge_.setNorm (kParamExperim, 0.0); bridge_.setNorm (kParamSpectral, 0.0); };
+    expBtn_.onClick      = [this] { bridge_.setNorm (kParamExperim, 1.0); bridge_.setNorm (kParamSpectral, 0.0); };
+    spectralBtn_.onClick = [this] { bridge_.setNorm (kParamExperim, 0.0); bridge_.setNorm (kParamSpectral, 1.0); };
 
     // Auto / Manual segmented pair (Manual = learn only from the regions dragged on the waveform).
     for (auto* b : { &autoBtn_, &manualBtn_ }) { b->setClickingTogglesState (false); addAndMakeVisible (*b); }
@@ -137,9 +141,14 @@ void ASView::timerCallback()
     for (auto& t : toggles_)
         t->btn.setToggleState (bridge_.getNorm (t->id) > 0.5, juce::dontSendNotification);
 
-    const bool exp = bridge_.getNorm (kParamExperim) > 0.5;
-    classicBtn_.setToggleState (! exp, juce::dontSendNotification);
-    expBtn_.setToggleState (exp, juce::dontSendNotification);
+    const bool exp  = bridge_.getNorm (kParamExperim) > 0.5;
+    const bool spec = bridge_.getNorm (kParamSpectral) > 0.5;
+    classicBtn_.setToggleState  (! exp && ! spec, juce::dontSendNotification);
+    expBtn_.setToggleState      (exp && ! spec,   juce::dontSendNotification);
+    spectralBtn_.setToggleState (spec,            juce::dontSendNotification);
+    for (auto& k : knobs_)
+        if (k->id == kParamBands)
+        { k->slider.setEnabled (spec); k->slider.setAlpha (spec ? 1.0f : 0.4f); k->label.setAlpha (spec ? 1.0f : 0.4f); }
 
     manualMode_ = bridge_.getNorm (kParamManual) > 0.5;
     autoBtn_.setToggleState (! manualMode_, juce::dontSendNotification);
@@ -191,9 +200,9 @@ void ASView::paint (juce::Graphics& g)
             g.drawImageWithin (logo, 14, 10, 220, 36, juce::RectanglePlacement::xLeft | juce::RectanglePlacement::yMid, false);
     }
 
-    // Grouped header background behind Classic|Experimental.
+    // Grouped header background behind Classic|Experimental|Spectral.
     {
-        auto u = classicBtn_.getBounds().getUnion (expBtn_.getBounds()).toFloat().expanded (4.0f);
+        auto u = classicBtn_.getBounds().getUnion (spectralBtn_.getBounds()).toFloat().expanded (4.0f);
         g.setColour (LNF::panelHi()); g.fillRoundedRectangle (u, 9.0f);
         g.setColour (LNF::line());    g.drawRoundedRectangle (u, 9.0f, 1.0f);
     }
@@ -324,7 +333,11 @@ void ASView::resized()
     {
         auto seg = [] (juce::Rectangle<int> box, juce::TextButton& a, juce::TextButton& b)
         { const int w = (box.getWidth() - 4) / 2; a.setBounds (box.removeFromLeft (w)); box.removeFromLeft (4); b.setBounds (box); };
-        seg (head.removeFromRight (188).withSizeKeepingCentre (188, 26), classicBtn_, expBtn_);
+        { auto box = head.removeFromRight (264).withSizeKeepingCentre (264, 26);
+          const int w = (box.getWidth() - 8) / 3;
+          classicBtn_.setBounds (box.removeFromLeft (w)); box.removeFromLeft (4);
+          expBtn_.setBounds (box.removeFromLeft (w));     box.removeFromLeft (4);
+          spectralBtn_.setBounds (box); }
         head.removeFromRight (8);
         (*std::find_if (toggles_.begin(), toggles_.end(), [] (auto& t) { return t->id == kParamEnhance; }))
             ->btn.setBounds (head.removeFromRight (80).withSizeKeepingCentre (80, 26));

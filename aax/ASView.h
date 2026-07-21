@@ -37,7 +37,7 @@ public:
     void mouseUp (const juce::MouseEvent&) override;
 
 private:
-    enum Kind { KPct, KMinFill, KGain, KFreq, KQ, KNormTgt };
+    enum Kind { KPct, KMinFill, KGain, KFreq, KQ, KNormTgt, KBands };
 
     struct Knob
     {
@@ -59,7 +59,7 @@ private:
 
     std::vector<std::unique_ptr<Knob>>   knobs_;
     std::vector<std::unique_ptr<Toggle>> toggles_;
-    juce::TextButton classicBtn_ { "Classic" }, expBtn_ { "Experimental" };
+    juce::TextButton classicBtn_ { "Classic" }, expBtn_ { "Experimental" }, spectralBtn_ { "Spectral" };
     juce::TextButton autoBtn_ { "Auto" }, manualBtn_ { "Manual" };
     juce::TextButton regenBtn_ { "Regenerate" };
 

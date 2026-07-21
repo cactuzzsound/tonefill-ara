@@ -88,6 +88,9 @@ AAX_Result ToneFillAS_Parameters::EffectInit()
     addFloat (kParamSeed, "Seed", 1.0f, 1.0f, 100.0f);
     // Auto (0) vs Manual (1): learn from the regions dragged on the waveform.
     addBool (kParamManual, "Manual", false, "auto", "manual");
+    // Spectral Mosaic: per-band clean selection + recombination.
+    addBool  (kParamSpectral, "Spectral", false, "off", "on");
+    addFloat (kParamBands,    "Bands",    7.0f, 3.0f, 12.0f);
 
     return AAX_SUCCESS;
 }
