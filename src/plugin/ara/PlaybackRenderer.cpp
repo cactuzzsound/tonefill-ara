@@ -31,6 +31,45 @@ void araLog (const juce::String& msg)
         .appendText (juce::Time::getCurrentTime().toString (false, true, true, true) + "  " + msg + "\n");
 }
 
+namespace
+{
+// Bypass A/B: write the analysed SOURCE into the region range (not looped) instead of the fill, so
+// the user can compare the room tone against the original. Shared by both renderers.
+void tileSourcePreview (juce::AudioBuffer<float>& buffer, double sampleRate,
+                        const std::vector<juce::ARAPlaybackRegion*>& regions,
+                        const juce::AudioPlayHead::PositionInfo& positionInfo,
+                        const plugin::SessionState::FillBuffer& src)
+{
+    if (src.empty() || src[0].empty()) return;
+    const long long len = (long long) src[0].size();
+    const auto numSamples = buffer.getNumSamples();
+    const auto timeInSamples = positionInfo.getTimeInSamples().orFallback (0);
+    const auto blockRange = juce::Range<juce::int64>::withStartAndLength (timeInSamples, (juce::int64) numSamples);
+
+    for (const auto region : regions)
+    {
+        const auto songRange = region->getSampleRange (sampleRate, juce::ARAPlaybackRegion::IncludeHeadAndTail::no);
+        const auto renderRange = blockRange.getIntersectionWith (songRange);
+        if (renderRange.isEmpty()) continue;
+
+        const int startInBuffer = (int) (renderRange.getStart() - blockRange.getStart());
+        const int count = (int) renderRange.getLength();
+        const auto regionStart = songRange.getStart();
+
+        for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+        {
+            const auto& srcCh = src[(std::size_t) juce::jmin (ch, (int) src.size() - 1)];
+            auto* dst = buffer.getWritePointer (ch);
+            for (int i = 0; i < count; ++i)
+            {
+                const long long spos = renderRange.getStart() + i - regionStart; // aligned, not looped
+                if (spos >= 0 && spos < len) dst[startInBuffer + i] = srcCh[(std::size_t) spos];
+            }
+        }
+    }
+}
+} // namespace
+
 // Background one-shot: read the ARA source, analyze, render a loopable fill, publish it.
 class ToneFillPlaybackRenderer::FillWorker : public juce::Thread
 {
@@ -118,6 +157,15 @@ public:
             for (int ch = 0; ch < effCh; ++ch) learnSrc.copyFrom (ch, 0, src, ch, 0, n);
             ss.sourceSamples.store (n);
             ss.sourceSampleRate.store (sampleRate);
+
+            // Keep a copy of the source for the Bypass A/B monitor.
+            {
+                auto sp = std::make_shared<tonefill::plugin::SessionState::FillBuffer>();
+                sp->resize ((std::size_t) effCh);
+                for (int ch = 0; ch < effCh; ++ch)
+                    (*sp)[(std::size_t) ch].assign (learnSrc.getReadPointer (ch), learnSrc.getReadPointer (ch) + n);
+                ss.setSourcePreview (std::move (sp), sampleRate);
+            }
             araLog ("readSource: effCh=" + juce::String (effCh) + " (src ch=" + juce::String (channels) + ")");
             return true;
         };
@@ -393,7 +441,7 @@ public:
                         }
                         if (lc > 1) for (auto& v : mono) v /= (float) lc;
 
-                        auto bands = tonefill::dsp::splitBandsLR (mono.data(), srcN, sampleRate, edges);
+                        auto bands = tonefill::dsp::splitBands (mono.data(), srcN, sampleRate, edges);
                         std::vector<float> accMono ((std::size_t) outN, 0.0f);
 
                         // Target timbre = the CLEAN room tone's spectral balance, measured full-band on
@@ -414,7 +462,7 @@ public:
                                         cleanMono[(std::size_t) i] += cc[(std::size_t) i];
                                 if (cap.size() > 1) for (auto& v : cleanMono) v /= (float) cap.size();
 
-                                auto cleanBands = tonefill::dsp::splitBandsLR (cleanMono.data(), cn, sampleRate, edges);
+                                auto cleanBands = tonefill::dsp::splitBands (cleanMono.data(), cn, sampleRate, edges);
                                 for (std::size_t bi = 0; bi < cleanBands.size() && bi < targetBandRms.size(); ++bi)
                                 {
                                     double e = 0.0; for (float v : cleanBands[bi]) e += (double) v * v;
@@ -606,7 +654,19 @@ bool ToneFillPlaybackRenderer::processBlock (juce::AudioBuffer<float>& buffer,
 
     buffer.clear(); // default: silence until the fill is ready / when not playing
 
-    if (! fillReady.load (std::memory_order_acquire) || ! positionInfo.getIsPlaying())
+    if (! positionInfo.getIsPlaying())
+        return true;
+
+    // Bypass A/B: play the source instead of the fill.
+    if (state_ != nullptr && state_->bypass.load())
+    {
+        double psr = sampleRate;
+        if (auto sp = state_->getSourcePreview (psr))
+            tileSourcePreview (buffer, sampleRate, getPlaybackRegions(), positionInfo, *sp);
+        return true;
+    }
+
+    if (! fillReady.load (std::memory_order_acquire))
         return true;
 
     std::shared_ptr<const FillData> data;
@@ -718,6 +778,15 @@ bool ToneFillEditorRenderer::processBlock (juce::AudioBuffer<float>& buffer,
     buffer.clear(); // replace the source: silence until the fill exists, never pass the source through
     if (state_ == nullptr || ! positionInfo.getIsPlaying())
         return true;
+
+    // Bypass A/B: play the source instead of the fill.
+    if (state_->bypass.load())
+    {
+        double psr = sampleRate;
+        if (auto sp = state_->getSourcePreview (psr))
+            tileSourcePreview (buffer, sampleRate, getPlaybackRegions(), positionInfo, *sp);
+        return true;
+    }
 
     double fillSr = sampleRate;
     auto fill = state_->getExportFill (fillSr); // same loop the playback renderer publishes

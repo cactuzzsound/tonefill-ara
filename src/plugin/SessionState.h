@@ -37,6 +37,7 @@ struct SessionState
     std::atomic<bool>          statisticalMode { false }; // Statistical selection (Design §E) vs Classic
     std::atomic<bool>          spectralMode { false };    // Spectral Mosaic: per-band select + synth + sum
     std::atomic<int>           spectralBands { 7 };       // Spectral: number of analysis bands (3..12)
+    std::atomic<bool>          bypass { false };          // A/B monitor: play the source instead of the fill
     std::atomic<bool>          hissFilter { false };  // Enhance-only live HF de-hiss (audio thread)
     std::atomic<float>         hissFreq { 9000.0f };  // de-hiss corner (Hz)
     std::atomic<float>         hissQ { 0.707f };      // de-hiss Q
@@ -71,6 +72,20 @@ struct SessionState
         return exportFill_;
     }
 
+    // The analysed source audio (per channel), for the Bypass A/B monitor. Set once per analysis.
+    void setSourcePreview (std::shared_ptr<const FillBuffer> s, double sr)
+    {
+        std::lock_guard<std::mutex> l (sourceMutex_);
+        sourcePreview_ = std::move (s);
+        sourcePreviewSr_ = sr;
+    }
+    std::shared_ptr<const FillBuffer> getSourcePreview (double& srOut)
+    {
+        std::lock_guard<std::mutex> l (sourceMutex_);
+        srOut = sourcePreviewSr_;
+        return sourcePreview_;
+    }
+
     // Downsampled source waveform for the UI: peak per bin + clean flag (selected vs rejected).
     struct WaveData { std::vector<float> peak; std::vector<char> clean; };
     void setWave (WaveData w) { std::lock_guard<std::mutex> l (waveMutex_); wave_ = std::move (w); }
@@ -99,6 +114,10 @@ private:
     std::mutex exportMutex_;
     std::shared_ptr<const FillBuffer> exportFill_;
     double exportSampleRate_ { 48000.0 };
+
+    std::mutex sourceMutex_;
+    std::shared_ptr<const FillBuffer> sourcePreview_;
+    double sourcePreviewSr_ { 48000.0 };
 
     std::mutex waveMutex_;
     WaveData wave_;

@@ -63,6 +63,7 @@ private:
     juce::TextButton classicBtn_ { "Classic" }, expBtn_ { "Experimental" }; // selection engine
     juce::TextButton spectralBtn_ { "Spectral" };                        // per-band mosaic synthesis
     juce::TextButton expandBtn_ { "Expand" };                            // open large waveform window
+    juce::TextButton bypassBtn_ { "Bypass" };                            // A/B: play source vs room tone
 
     // Loudness normalize.
     juce::TextButton normBtn_ { "Normalize" };
@@ -83,7 +84,7 @@ private:
     using BA  = juce::AudioProcessorValueTreeState::ButtonAttachment;
     using CBA = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
     std::unique_ptr<SA> thA_, spA_, blA_, vaA_, mfA_, flA_, sbA_, gaA_, leA_, ntA_, hfrA_, hqA_;
-    std::unique_ptr<BA>  neA_, wfA_, enA_, hbA_;
+    std::unique_ptr<BA>  neA_, wfA_, enA_, hbA_, byA_;
     std::unique_ptr<CBA> nuA_;
 
     std::unique_ptr<WaveformWindow> waveWin_;

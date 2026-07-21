@@ -129,6 +129,10 @@ MainView::MainView (PluginProcessor& processor) : processor_ (processor)
     exportBtn_.setTooltip ("Write the fill to a WAV file. Length is set by Export Len.");
     exportBtn_.onClick = [this] { exportWav(); };
     addAndMakeVisible (exportBtn_);
+    bypassBtn_.setClickingTogglesState (true);
+    bypassBtn_.setTooltip ("Monitor the original source instead of the room tone, to A/B them. Does not change what Export writes.");
+    addAndMakeVisible (bypassBtn_);
+    byA_ = std::make_unique<BA> (apvts, IDs::bypass, bypassBtn_);
 
     normBtn_.setClickingTogglesState (true);
     normBtn_.setTooltip ("Bake the output to a fixed loudness target. When on, Output is bypassed.");
@@ -545,6 +549,8 @@ void MainView::resized()
     exportBtn_.setBounds (tipRow.removeFromRight (150).withSizeKeepingCentre (150, 40));
     tipRow.removeFromRight (10);
     regenBtn_.setBounds (tipRow.removeFromRight (130).withSizeKeepingCentre (130, 40));
+    tipRow.removeFromRight (10);
+    bypassBtn_.setBounds (tipRow.removeFromRight (110).withSizeKeepingCentre (110, 40));
     tipRow.removeFromRight (12);
     tipCard_ = tipRow;
     tipLbl_.setBounds (tipCard_.reduced (14, 0).withTrimmedLeft (34));
@@ -660,6 +666,7 @@ void MainView::timerCallback()
     if (changed) ss.generation.fetch_add (1);
     ss.outputGain.store (juce::Decibels::decibelsToGain (apvts.getRawParameterValue (IDs::outputGain)->load()));
     ss.renderLength.store (apvts.getRawParameterValue (IDs::renderLength)->load());
+    ss.bypass.store (apvts.getRawParameterValue (IDs::bypass)->load() > 0.5f); // A/B monitor, no re-render
 
     const bool normOn  = apvts.getRawParameterValue (IDs::normEnabled)->load() > 0.5f;
     const bool normLufs = apvts.getRawParameterValue (IDs::normUnit)->load() > 0.5f;
