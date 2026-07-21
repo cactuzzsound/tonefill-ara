@@ -96,7 +96,7 @@ MainView::MainView (PluginProcessor& processor) : processor_ (processor)
     addAndMakeVisible (enhanceBtn_);
     enA_ = std::make_unique<BA> (apvts, IDs::paulStretch, enhanceBtn_);
     wholeBtn_.setClickingTogglesState (true);
-    wholeBtn_.setTooltip ("Analyze the WHOLE item to find clean room tone scattered across a long take. Off = the first 4 minutes.");
+    wholeBtn_.setTooltip ("Analyze the WHOLE item to find clean room tone scattered across a long take (slower, more thorough). Off = the first 10 minutes.");
     addAndMakeVisible (wholeBtn_);
     wfA_ = std::make_unique<BA> (apvts, IDs::wholeFile, wholeBtn_);
     // Mode (mutually exclusive): Classic / Experimental pick the selection engine; Spectral switches

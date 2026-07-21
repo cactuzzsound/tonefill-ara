@@ -64,11 +64,24 @@ public:
 
         auto readSource = [&] (double capSec) -> bool
         {
-            const int want = (int) juce::jmin (total, (long long) (capSec * sampleRate));
+            // Quality-first: analyse as much of the source as fits a memory budget rather than a short
+            // fixed window -- more material means better clean-tone selection on long takes. Degrades
+            // gracefully (halve on allocation failure) instead of aborting on a huge file.
+            const long long kByteBudget    = 1500LL * 1024 * 1024;                 // ~1.5 GB for src + learn
+            const long long bytesPerSample = (long long) juce::jmax (1, channels) * 4 * 2;
+            const long long maxByMem       = juce::jmax ((long long) (sampleRate * 5), kByteBudget / bytesPerSample);
+            long long want = juce::jmin (total, (long long) (capSec * sampleRate));
+            want = juce::jmin (want, maxByMem);
             if (want <= 0) return false;
-            try { src.setSize (channels, want); }
-            catch (...) { araLog ("readSource: allocation failed for " + juce::String (want) + " samples"); return false; }
-            n = want;
+
+            bool alloc = false;
+            for (int tries = 0; tries < 8 && want > (long long) (sampleRate * 5); ++tries)
+            {
+                try { src.setSize (channels, (int) want); alloc = true; break; }
+                catch (...) { araLog ("readSource: alloc failed at " + juce::String (want) + ", halving"); want /= 2; }
+            }
+            if (! alloc) { try { src.setSize (channels, (int) juce::jmax ((long long) 1, want)); } catch (...) { return false; } }
+            n = (int) want;
             araLog ("readSource: total=" + juce::String (total) + " read=" + juce::String (n)
                     + " ch=" + juce::String (channels) + " sr=" + juce::String (sampleRate) + " cap=" + juce::String (capSec));
 
@@ -110,7 +123,8 @@ public:
         };
 
         bool lastWhole = ss.wholeFile.load();
-        if (! readSource (lastWhole ? 900.0 : 240.0) || threadShouldExit()) return;
+        // Default = first 10 min (was 4); Full = the whole item, memory-bounded. Quality over speed.
+        if (! readSource (lastWhole ? 1.0e9 : 600.0) || threadShouldExit()) return;
 
         tonefill::core::DiagnosticsLogger diag;
         engine::analysis::AnalysisSession session (diag);
@@ -288,7 +302,7 @@ public:
             const bool whole = ss.wholeFile.load();
             if (whole != lastWhole)
             {
-                readSource (whole ? 900.0 : 240.0);
+                readSource (whole ? 1.0e9 : 600.0);
                 lastWhole = whole;
                 model = nullptr; // force re-analyze with the new window
             }
@@ -332,7 +346,9 @@ public:
                 // the "looped" feel dissolves on rich captures while short ones stay compact. Turning
                 // Smoothness no longer changes the loop length.
                 const double availSec = (double) model->learnMaterialSeconds;
-                const double loopSec  = juce::jlimit (15.0, 60.0, availSec * 4.0);
+                // Quality over speed: allow a longer non-repeating loop when there's material for it
+                // (scales with clean seconds, so short captures still stay compact). Was capped at 60 s.
+                const double loopSec  = juce::jlimit (15.0, 120.0, availSec * 4.0);
                 const int loopLen = (int) (loopSec * sampleRate);
                 const int xf = (int) (0.25 * sampleRate); // 250 ms seamless-loop crossfade
                 s.targetSampleRate = sampleRate;
