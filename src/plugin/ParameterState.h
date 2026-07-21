@@ -39,6 +39,7 @@ public:
         static constexpr auto wholeFile      = "wholeFile";      // analyze whole item vs first 4 min
         static constexpr auto statistical    = "statistical";    // Statistical selection (Design §E) vs Classic
         static constexpr auto spectral       = "spectral";       // Spectral Mosaic: per-band select + synth
+        static constexpr auto spectralBands  = "spectralBands";  // Spectral: number of analysis bands
         static constexpr auto learnMode      = "learnMode";      // AudioSuite: learn from selection vs generate
         static constexpr auto renderLength   = "renderLength";   // Export WAV length, seconds
         static constexpr auto hissFilter     = "hissFilter";     // Enhance-only live HF de-hiss on/off

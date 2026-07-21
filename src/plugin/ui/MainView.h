@@ -48,7 +48,7 @@ private:
 
     juce::Label titleLbl_, subLbl_;
 
-    Knob threshold_, speech_, blend_, variation_, minFill_, flatness_, gain_, length_;
+    Knob threshold_, speech_, blend_, variation_, minFill_, flatness_, bands_, gain_, length_;
 
     // Value-pill rectangles for the 9 knobs, rebuilt in resized(), drawn in paint().
     std::vector<juce::Rectangle<int>> valuePills_;
@@ -82,8 +82,8 @@ private:
     using SA  = juce::AudioProcessorValueTreeState::SliderAttachment;
     using BA  = juce::AudioProcessorValueTreeState::ButtonAttachment;
     using CBA = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
-    std::unique_ptr<SA> thA_, spA_, blA_, vaA_, mfA_, flA_, gaA_, leA_, ntA_, hfrA_, hqA_;
-    std::unique_ptr<BA>  neA_, wfA_, enA_, hbA_, scA_;
+    std::unique_ptr<SA> thA_, spA_, blA_, vaA_, mfA_, flA_, sbA_, gaA_, leA_, ntA_, hfrA_, hqA_;
+    std::unique_ptr<BA>  neA_, wfA_, enA_, hbA_;
     std::unique_ptr<CBA> nuA_;
 
     std::unique_ptr<WaveformWindow> waveWin_;

@@ -349,7 +349,20 @@ public:
                     // per band, so per-band loops are steadier than one broadband loop, and each band
                     // (especially the low one, where a room shift is most audible) gets its own clean
                     // selection instead of needing every band clean at the same instant.
-                    static const std::vector<double> edges { 150.0, 400.0, 800.0, 1500.0, 4000.0, 8000.0 };
+                    // Band count is user-set (the "Bands" knob): fewer = wider bands, more = narrower.
+                    // Edges are geometric across 150..8000 Hz (default 7 bands ~ the standard split),
+                    // with the sub-150 and >8000 anchor bands kept at the ends.
+                    const int nBands = juce::jlimit (3, 12, ss.spectralBands.load());
+                    std::vector<double> edges;
+                    {
+                        const int nEdges = nBands - 1; // 150 and 8000 are the first/last edges
+                        const double lo = 150.0, hi = 8000.0;
+                        for (int e = 0; e < nEdges; ++e)
+                        {
+                            const double t = nEdges > 1 ? (double) e / (double) (nEdges - 1) : 0.0;
+                            edges.push_back (lo * std::pow (hi / lo, t));
+                        }
+                    }
                     const int outN = (int) s.targetDurationSamples;
                     const int srcN = learnKept.getNumSamples();
                     if (srcN > 0 && outN > 0)

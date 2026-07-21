@@ -46,6 +46,7 @@ APVTS::ParameterLayout ParameterState::createLayout()
     layout.add (std::make_unique<juce::AudioParameterBool> (ParameterID { IDs::wholeFile, 1 }, "Analyze Whole File", false));
     layout.add (std::make_unique<juce::AudioParameterBool> (ParameterID { IDs::statistical, 1 }, "Statistical Selection", false));
     layout.add (std::make_unique<juce::AudioParameterBool> (ParameterID { IDs::spectral, 1 }, "Spectral Mosaic", false));
+    layout.add (std::make_unique<juce::AudioParameterInt> (ParameterID { IDs::spectralBands, 1 }, "Spectral Bands", 3, 12, 7));
     layout.add (std::make_unique<juce::AudioParameterBool> (ParameterID { IDs::learnMode, 1 }, "Learn", false));
     layout.add (std::make_unique<AudioParameterFloat> (ParameterID { IDs::renderLength, 1 }, "Export Len",
         NormalisableRange<float> (0.5f, 30.0f, 0.1f), 5.0f));

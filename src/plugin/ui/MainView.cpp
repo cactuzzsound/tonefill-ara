@@ -60,6 +60,8 @@ MainView::MainView (PluginProcessor& processor) : processor_ (processor)
     minFill_.slider.setRange (0.2, 5.0, 0.05); minFill_.slider.setTextValueSuffix (" s");
     initKnob (*this, flatness_, "Flatness",
               "How strict the stationarity requirement is. Higher = only very steady stretches, so the fill avoids audible jumps.", LNF::purple());
+    initKnob (*this, bands_, "Bands",
+              "Spectral only: how many frequency bands the source is split into. Fewer = wider bands, more = narrower bands.", LNF::purple());
     initKnob (*this, blend_, "Crossfade",
               "How much neighbouring chunks overlap and blend. Higher = smoother joins.", LNF::purple());
     initKnob (*this, variation_, "Smoothness",
@@ -73,6 +75,7 @@ MainView::MainView (PluginProcessor& processor) : processor_ (processor)
     thA_ = std::make_unique<SA> (apvts, IDs::threshold,    threshold_.slider);
     spA_ = std::make_unique<SA> (apvts, IDs::speechReject, speech_.slider);
     blA_ = std::make_unique<SA> (apvts, IDs::blend,        blend_.slider);
+    sbA_ = std::make_unique<SA> (apvts, IDs::spectralBands, bands_.slider);
     vaA_ = std::make_unique<SA> (apvts, IDs::randomness,   variation_.slider);
     mfA_ = std::make_unique<SA> (apvts, IDs::minFill,      minFill_.slider);
     flA_ = std::make_unique<SA> (apvts, IDs::flatness,     flatness_.slider);
@@ -96,19 +99,23 @@ MainView::MainView (PluginProcessor& processor) : processor_ (processor)
     wholeBtn_.setTooltip ("Analyze the WHOLE item to find clean room tone scattered across a long take. Off = the first 4 minutes.");
     addAndMakeVisible (wholeBtn_);
     wfA_ = std::make_unique<BA> (apvts, IDs::wholeFile, wholeBtn_);
-    spectralBtn_.setClickingTogglesState (true);
-    spectralBtn_.setTooltip ("Spectral (experimental): split the source into frequency bands, find clean room tone in each band separately, and recombine. Steadier low end, more usable material. Slower to render.");
-    addAndMakeVisible (spectralBtn_);
-    scA_ = std::make_unique<BA> (apvts, IDs::spectral, spectralBtn_);
-
-    // Selection engine: Classic vs Experimental (statistical scoring). Driven manually on the param.
-    for (auto* b : { &classicBtn_, &expBtn_ }) { b->setClickingTogglesState (false); addAndMakeVisible (*b); }
+    // Mode (mutually exclusive): Classic / Experimental pick the selection engine; Spectral switches
+    // to the per-band mosaic. All three driven manually on the statistical + spectral params.
+    for (auto* b : { &classicBtn_, &expBtn_, &spectralBtn_ }) { b->setClickingTogglesState (false); addAndMakeVisible (*b); }
     classicBtn_.setTooltip ("Classic selection: the tuned gate stack (default).");
     expBtn_.setTooltip ("Experimental selection: weighted per-frame scoring. A/B against Classic by ear.");
-    if (auto* sp = apvts.getParameter (IDs::statistical))
+    spectralBtn_.setTooltip ("Spectral (experimental): split into frequency bands, find clean room tone per band and recombine. Steadier low end, more usable material. The Bands knob sets how many bands. Slower to render.");
     {
-        classicBtn_.onClick = [sp] { sp->setValueNotifyingHost (0.0f); };
-        expBtn_.onClick     = [sp] { sp->setValueNotifyingHost (1.0f); };
+        auto* stat = apvts.getParameter (IDs::statistical);
+        auto* spec = apvts.getParameter (IDs::spectral);
+        auto setMode = [stat, spec] (bool s, bool sp)
+        {
+            if (stat) stat->setValueNotifyingHost (s  ? 1.0f : 0.0f);
+            if (spec) spec->setValueNotifyingHost (sp ? 1.0f : 0.0f);
+        };
+        classicBtn_.onClick  = [setMode] { setMode (false, false); };
+        expBtn_.onClick      = [setMode] { setMode (true,  false); };
+        spectralBtn_.onClick = [setMode] { setMode (false, true);  };
     }
 
     expandBtn_.setTooltip ("Open a large waveform view with a timecode ruler, zoom and scroll for precise selecting.");
@@ -262,9 +269,8 @@ void MainView::paint (juce::Graphics& g)
         g.drawRoundedRectangle (u, 9.0f, 1.0f);
     };
     groupBg (autoBtn_.getBounds(), manualBtn_.getBounds());
-    groupBg (spectralBtn_.getBounds(), spectralBtn_.getBounds());
     groupBg (enhanceBtn_.getBounds(), wholeBtn_.getBounds());
-    groupBg (classicBtn_.getBounds(), expBtn_.getBounds());
+    groupBg (classicBtn_.getBounds(), spectralBtn_.getBounds()); // engine group spans all 3 modes
 
     // Three group cards + headers.
     const char* titles[3] = { "DETECTION", "STRUCTURE", "TEXTURE" };
@@ -455,16 +461,17 @@ void MainView::resized()
     {
         auto place = [] (juce::TextButton& a, juce::TextButton& b, juce::Rectangle<int> box)
         { const int w = (box.getWidth() - 4) / 2; a.setBounds (box.removeFromLeft (w)); box.removeFromLeft (4); b.setBounds (box); };
-        auto engine = head.removeFromRight (196).withSizeKeepingCentre (196, 26);
-        place (classicBtn_, expBtn_, engine);
+        auto engine = head.removeFromRight (270).withSizeKeepingCentre (270, 26);
+        { const int ew = (engine.getWidth() - 8) / 3;
+          classicBtn_.setBounds (engine.removeFromLeft (ew)); engine.removeFromLeft (4);
+          expBtn_.setBounds (engine.removeFromLeft (ew));     engine.removeFromLeft (4);
+          spectralBtn_.setBounds (engine); }
         head.removeFromRight (10);
         auto proc = head.removeFromRight (150).withSizeKeepingCentre (150, 26);
         place (enhanceBtn_, wholeBtn_, proc);
         head.removeFromRight (10);
         auto learn = head.removeFromRight (130).withSizeKeepingCentre (130, 26);
         place (autoBtn_, manualBtn_, learn);
-        head.removeFromRight (10);
-        spectralBtn_.setBounds (head.removeFromRight (96).withSizeKeepingCentre (96, 26));
     }
     r.removeFromTop (12);
 
@@ -478,7 +485,7 @@ void MainView::resized()
     // themselves against the uniform 3-slot width so knob sizes stay identical across cards.
     std::vector<std::vector<Knob*>> groups = {
         { &threshold_, &speech_, &minFill_ },
-        { &flatness_, &blend_ },
+        { &flatness_, &bands_, &blend_ },
         { &variation_, &gain_, &length_ }
     };
     for (int i = 0; i < 3; ++i)
@@ -588,6 +595,7 @@ void MainView::loadParamsFromState (SessionState& ss)
     setB (IDs::hissFilter,   ss.hissFilter.load());
     setF (IDs::hissFreq,     ss.hissFreq.load());
     setF (IDs::hissQ,        ss.hissQ.load());
+    setF (IDs::spectralBands, (float) ss.spectralBands.load());
 
     // Auto/Manual is not an APVTS parameter (it drives the waveform selection UI).
     manualMode_ = ss.manualMode.load();
@@ -647,6 +655,8 @@ void MainView::timerCallback()
     mirror (ss.flatness,     apvts.getRawParameterValue (IDs::flatness)->load());
     mirrorB (ss.paulStretch, apvts.getRawParameterValue (IDs::paulStretch)->load() > 0.5f);
     mirrorB (ss.spectralMode, apvts.getRawParameterValue (IDs::spectral)->load() > 0.5f); // re-render on toggle
+    { const int nb = (int) std::lround (apvts.getRawParameterValue (IDs::spectralBands)->load());
+      if (ss.spectralBands.load() != nb) { ss.spectralBands.store (nb); changed = true; } } // re-render on band count
     if (changed) ss.generation.fetch_add (1);
     ss.outputGain.store (juce::Decibels::decibelsToGain (apvts.getRawParameterValue (IDs::outputGain)->load()));
     ss.renderLength.store (apvts.getRawParameterValue (IDs::renderLength)->load());
@@ -673,9 +683,15 @@ void MainView::timerCallback()
     hissQ_.slider.setAlpha (enh && hissOn ? 1.0f : 0.4f);    hissQ_.label.setAlpha (hissA);
 
     const bool stat = apvts.getRawParameterValue (IDs::statistical)->load() > 0.5f;
+    const bool spec = apvts.getRawParameterValue (IDs::spectral)->load() > 0.5f;
     ss.statisticalMode.store (stat);
-    classicBtn_.setToggleState (! stat, juce::dontSendNotification);
-    expBtn_.setToggleState (stat, juce::dontSendNotification);
+    classicBtn_.setToggleState  (! stat && ! spec, juce::dontSendNotification);
+    expBtn_.setToggleState      (stat && ! spec,   juce::dontSendNotification);
+    spectralBtn_.setToggleState (spec,             juce::dontSendNotification);
+
+    // Bands knob is only meaningful in Spectral mode.
+    bands_.slider.setEnabled (spec); bands_.label.setEnabled (spec);
+    bands_.slider.setAlpha (spec ? 1.0f : 0.4f); bands_.label.setAlpha (spec ? 1.0f : 0.4f);
 
     gain_.slider.setEnabled (! normOn);
     normTarget_.setEnabled (normOn);
