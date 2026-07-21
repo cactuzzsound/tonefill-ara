@@ -88,6 +88,36 @@ private:
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ToneFillPlaybackRenderer)
 };
+
+// ARA editor renderer: replaces the region with the SAME synthesized fill during audition (e.g.
+// Nuendo/Cubase playing from the Sample Editor). Without this, JUCE's default editor renderer lets
+// the source pass through unaltered, so those hosts play the original clip instead of the room tone.
+// It does no analysis of its own -- it reads the loop the playback renderer's worker published into
+// the shared per-source SessionState.
+class ToneFillEditorRenderer : public juce::ARAEditorRenderer
+{
+public:
+    ToneFillEditorRenderer (ARA::PlugIn::DocumentController* dc, ProcessingLockInterface& lock);
+
+    void prepareToPlay (double sampleRate, int maximumSamplesPerBlock, int numChannels,
+                        juce::AudioProcessor::ProcessingPrecision,
+                        AlwaysNonRealtime alwaysNonRealtime) override;
+    void releaseResources() override {}
+
+    bool processBlock (juce::AudioBuffer<float>& buffer,
+                       juce::AudioProcessor::Realtime realtime,
+                       const juce::AudioPlayHead::PositionInfo& positionInfo) noexcept override;
+
+    using juce::ARAEditorRenderer::processBlock;
+
+private:
+    ProcessingLockInterface& lockInterface;
+    ARA::PlugIn::DocumentController* documentController_ = nullptr;
+    std::shared_ptr<plugin::SessionState> state_; // shared per audio source (same loop as playback)
+    double sampleRate = 48000.0;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ToneFillEditorRenderer)
+};
 } // namespace tonefill::plugin::ara
 
 #endif // TONEFILL_ARA_AVAILABLE

@@ -683,6 +683,84 @@ bool ToneFillPlaybackRenderer::processBlock (juce::AudioBuffer<float>& buffer,
 
     return true;
 }
+
+//==============================================================================
+ToneFillEditorRenderer::ToneFillEditorRenderer (ARA::PlugIn::DocumentController* dc,
+                                                ProcessingLockInterface& lock)
+    : juce::ARAEditorRenderer (dc), lockInterface (lock), documentController_ (dc)
+{
+}
+
+void ToneFillEditorRenderer::prepareToPlay (double sampleRateIn, int, int,
+                                            juce::AudioProcessor::ProcessingPrecision,
+                                            AlwaysNonRealtime)
+{
+    sampleRate = sampleRateIn;
+    araLog ("editorRenderer prepareToPlay: regions=" + juce::String ((int) getPlaybackRegions().size()));
+}
+
+bool ToneFillEditorRenderer::processBlock (juce::AudioBuffer<float>& buffer,
+                                           juce::AudioProcessor::Realtime,
+                                           const juce::AudioPlayHead::PositionInfo& positionInfo) noexcept
+{
+    const auto lock = lockInterface.getProcessingLock();
+    if (! lock.isLocked())
+        return true;
+
+    // Resolve the shared per-source state lazily (the region attaches after binding).
+    if (state_ == nullptr)
+        if (auto* dc = specialisedDocumentController (documentController_))
+            for (const auto region : getPlaybackRegions())
+                if (auto* mod = region->getAudioModification())
+                    if (auto* src = mod->getAudioSource())
+                        { state_ = dc->stateForSource (src); break; }
+
+    buffer.clear(); // replace the source: silence until the fill exists, never pass the source through
+    if (state_ == nullptr || ! positionInfo.getIsPlaying())
+        return true;
+
+    double fillSr = sampleRate;
+    auto fill = state_->getExportFill (fillSr); // same loop the playback renderer publishes
+    if (fill == nullptr || fill->empty() || (*fill)[0].empty())
+        return true;
+
+    const long long len = (long long) (*fill)[0].size();
+    const auto numSamples = buffer.getNumSamples();
+    const auto timeInSamples = positionInfo.getTimeInSamples().orFallback (0);
+    const auto blockRange = juce::Range<juce::int64>::withStartAndLength (timeInSamples, (juce::int64) numSamples);
+
+    for (const auto region : getPlaybackRegions())
+    {
+        const auto songRange = region->getSampleRange (sampleRate, juce::ARAPlaybackRegion::IncludeHeadAndTail::no);
+        const auto renderRange = blockRange.getIntersectionWith (songRange);
+        if (renderRange.isEmpty())
+            continue;
+
+        const int startInBuffer = (int) (renderRange.getStart() - blockRange.getStart());
+        const int count = (int) renderRange.getLength();
+        const auto regionStart = songRange.getStart();
+
+        for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+        {
+            const auto& srcCh = (*fill)[(std::size_t) juce::jmin (ch, (int) fill->size() - 1)];
+            auto* dst = buffer.getWritePointer (ch);
+            for (int i = 0; i < count; ++i)
+            {
+                long long fpos = (renderRange.getStart() + i - regionStart) % len;
+                if (fpos < 0) fpos += len;
+                dst[startInBuffer + i] = srcCh[(std::size_t) fpos];
+            }
+        }
+    }
+
+    // Live Output gain (Normalize bakes its gain into the published loop; unity when it's on).
+    const float gain = (! state_->normalizeEnabled.load()) ? state_->outputGain.load() : 1.0f;
+    if (std::fabs (gain - 1.0f) > 1.0e-4f)
+        for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+            juce::FloatVectorOperations::multiply (buffer.getWritePointer (ch), gain, numSamples);
+
+    return true;
+}
 } // namespace tonefill::plugin::ara
 
 #endif // TONEFILL_ARA_AVAILABLE

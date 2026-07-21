@@ -49,6 +49,9 @@ protected:
     void didEndEditing    (juce::ARADocument*) override { processBlockLock.exitWrite(); }
 
     juce::ARAPlaybackRenderer* doCreatePlaybackRenderer() noexcept override;
+    // Our editor renderer replaces the region with the fill during audition (Sample Editor playback
+    // in Nuendo/Cubase); JUCE's default one would pass the source through.
+    juce::ARAEditorRenderer* doCreateEditorRenderer() noexcept override;
 
     // Persist each clip's parameters into the ARA archive, keyed by the audio source's persistent
     // ID, so per-clip settings survive project save/reload. (The AmbienceModel itself is still

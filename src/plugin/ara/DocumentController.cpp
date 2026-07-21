@@ -123,6 +123,12 @@ juce::ARAPlaybackRenderer* ToneFillDocumentController::doCreatePlaybackRenderer(
     return new ToneFillPlaybackRenderer (getDocumentController(), *this);
 }
 
+juce::ARAEditorRenderer* ToneFillDocumentController::doCreateEditorRenderer() noexcept
+{
+    araLog ("DocumentController::doCreateEditorRenderer");
+    return new ToneFillEditorRenderer (getDocumentController(), *this);
+}
+
 bool ToneFillDocumentController::doStoreObjectsToStream (juce::ARAOutputStream& output,
                                                          const juce::ARAStoreObjectsFilter* filter)
 {
