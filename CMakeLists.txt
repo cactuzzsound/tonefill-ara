@@ -26,6 +26,7 @@ add_library(tonefill_engine STATIC
     src/dsp/GranularSynth.cpp
     src/dsp/MacroEnvelope.cpp
     src/dsp/AmbienceConcat.cpp
+    src/dsp/SpectralBands.cpp
     src/dsp/VoiceDetect.cpp
     src/dsp/Loudness.cpp
     src/dsp/NoiseModel.cpp

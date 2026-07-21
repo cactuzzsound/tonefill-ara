@@ -13,7 +13,7 @@ namespace
 // can be skipped and a future format extended without desyncing the stream.
 constexpr int kArchiveMagic  = 0x54464152; // 'TFAR'
 constexpr int kArchiveVer    = 1;
-constexpr int kParamBlockVer = 1;
+constexpr int kParamBlockVer = 2; // v2 appended spectralMode; v1 blocks still read (spectral := false)
 
 void writeParamBlock (juce::OutputStream& os, plugin::SessionState& ss)
 {
@@ -42,11 +42,14 @@ void writeParamBlock (juce::OutputStream& os, plugin::SessionState& ss)
     const auto ranges = ss.getManualRanges();
     os.writeInt ((int) ranges.size());
     for (const auto& r : ranges) { os.writeInt (r.first); os.writeInt (r.second); }
+
+    os.writeBool (ss.spectralMode.load()); // v2+
 }
 
 bool readParamBlock (juce::InputStream& is, plugin::SessionState& ss)
 {
-    if (is.readInt() != kParamBlockVer) return false;
+    const int ver = is.readInt();
+    if (ver < 1 || ver > kParamBlockVer) return false;
     ss.threshold.store       (is.readFloat());
     ss.speechReject.store    (is.readFloat());
     ss.fragment.store        (is.readFloat());
@@ -74,6 +77,8 @@ bool readParamBlock (juce::InputStream& is, plugin::SessionState& ss)
     ranges.reserve ((size_t) n);
     for (int i = 0; i < n; ++i) { const int a = is.readInt(); const int b = is.readInt(); ranges.emplace_back (a, b); }
     ss.setManualRanges (std::move (ranges));
+
+    if (ver >= 2) ss.spectralMode.store (is.readBool());
 
     ss.paramsEpoch.fetch_add (1);  // editor reloads the knobs
     ss.generation.fetch_add (1);   // worker re-renders with the restored params
