@@ -9,6 +9,7 @@
 #include "engine/analysis/AnalysisSession.h"
 #include "engine/synthesis/AmbienceRenderer.h"
 #include "engine/model/RenderSettings.h"
+#include "dsp/SpectralBands.h"
 #include "plugin/SessionState.h"
 #include "plugin/ara/DocumentControllerImpl.h"
 
@@ -117,14 +118,15 @@ public:
 
         // (Re)analyze with the current Threshold; updates the UI status. Re-runs when Threshold
         // moves (it changes WHICH source material is learned, so it needs fresh analysis).
-        auto analyze = [&] (float threshold, const juce::AudioBuffer<float>& learnInput, bool useManual)
+        auto analyze = [&] (float threshold, const juce::AudioBuffer<float>& learnInput, bool useManual,
+                            bool updateStatus = true)
             -> engine::model::AmbienceModelPtr
         {
             engine::analysis::AnalysisContext ctx;
             ctx.leftContext.makeCopyOf (learnInput);
             ctx.rightContext.makeCopyOf (learnInput);
             ctx.analysisSampleRate = sampleRate;
-            ctx.numChannels = effCh;
+            ctx.numChannels = juce::jmax (1, learnInput.getNumChannels()); // 1 for a spectral band pass
             ctx.leftEnabled = true;
             ctx.useManualSelection = useManual;
             ctx.cleanThreshold = threshold;
@@ -133,10 +135,11 @@ public:
             ctx.minFillSeconds = ss.minFill.load();
             ctx.statisticalSelection = ss.statisticalMode.load();
             ctx.sourceContentHash = (std::uint64_t) n;
-            ss.phase.store (1);
+            if (updateStatus) ss.phase.store (1);
             auto r = session.run (ctx, cancel);
-            if (! r.ok()) { ss.phase.store (0); return nullptr; }
+            if (! r.ok()) { if (updateStatus) ss.phase.store (0); return nullptr; }
             const auto m = r.value();
+            if (! updateStatus) return m; // per-band spectral pass: audio only, don't touch the UI
             const int nP = m->tonalPerChannel.empty() ? 0 : (int) m->tonalPerChannel[0].partials.size();
             const float lvl = (m->noisePerChannel.empty() || m->noisePerChannel[0].targetRms <= 0.0f)
                                   ? -120.0f : 20.0f * std::log10 (m->noisePerChannel[0].targetRms);
@@ -222,6 +225,7 @@ public:
 
         engine::synthesis::AmbienceRenderer renderer;
         engine::model::AmbienceModelPtr model;
+        juce::AudioBuffer<float> learnKept; // the audio the model was built from (for the spectral path)
         float lastThreshold = -1.0f, lastSpeech = -1.0f, lastFlat = -1.0f, lastMinFill = -1.0f;
         int lastGen = -1, lastManualGen = -1;
         bool lastManual = false, lastStat = false;
@@ -302,6 +306,7 @@ public:
                 const auto ranges = manual ? ss.getManualRanges() : std::vector<std::pair<int, int>>{};
                 const bool useManual = manual && ! ranges.empty();
                 const juce::AudioBuffer<float> learnInput = useManual ? buildManual (ranges) : learnSrc;
+                learnKept.makeCopyOf (learnInput); // spectral path re-reads this to band-split
                 model = analyze (thr, learnInput, useManual);
                 lastThreshold = thr; lastSpeech = spk; lastFlat = flat; lastMinFill = minf;
                 lastManual = manual; lastManualGen = mGen; lastStat = stat;
@@ -314,7 +319,11 @@ public:
                 engine::model::RenderSettings s;
                 s.mode = engine::model::Mode::Ambience; // only exposed mode
                 s.paulStretch = ss.paulStretch.load();  // Enhance
-                s.fragmentMs = 200.0f + ss.fragment.load() * 2800.0f;   // 200..3000 ms
+                // Chunk Size was removed from the UI: the grain-join machinery (join cost, zero-cross
+                // anchoring, Hann overlap, anti-repeat) hides grain boundaries, so grain length was
+                // inaudible for stationary room tone, and grainCloud caps it to srcLen/4 anyway. Pin a
+                // sensible length; grainCloud still adapts it down for short captures.
+                s.fragmentMs = 700.0f;
                 s.blendFrac  = 0.05f + ss.blend.load() * 0.45f;          // 5..50 %
                 s.randomness = ss.randomness.load();
                 s.seed = ss.seed.load();
@@ -330,11 +339,75 @@ public:
                 s.targetChannels = effCh;
                 s.targetDurationSamples = (long long) (loopLen + xf);
 
-                auto out = renderer.render (*model, s, cancel);
-                if (out.ok())
-                {
-                    auto chans = std::move (out.value().channels);
+                std::vector<std::vector<float>> chans;
+                bool haveChans = false;
 
+                if (ss.spectralMode.load())
+                {
+                    // Spectral Mosaic: split the analysed source into Linkwitz-Riley bands and select
+                    // + synthesize each band independently, then sum. Room tone is near-stationary
+                    // per band, so per-band loops are steadier than one broadband loop, and each band
+                    // (especially the low one, where a room shift is most audible) gets its own clean
+                    // selection instead of needing every band clean at the same instant.
+                    static const std::vector<double> edges { 150.0, 400.0, 800.0, 1500.0, 4000.0, 8000.0 };
+                    const int outN = (int) s.targetDurationSamples;
+                    const int srcN = learnKept.getNumSamples();
+                    if (srcN > 0 && outN > 0)
+                    {
+                        // Mono-collapse the analysed source, then band-split it.
+                        std::vector<float> mono ((std::size_t) srcN, 0.0f);
+                        const int lc = juce::jmax (1, learnKept.getNumChannels());
+                        for (int c = 0; c < lc; ++c)
+                        {
+                            const float* p = learnKept.getReadPointer (c);
+                            for (int i = 0; i < srcN; ++i) mono[(std::size_t) i] += p[i];
+                        }
+                        if (lc > 1) for (auto& v : mono) v /= (float) lc;
+
+                        auto bands = tonefill::dsp::splitBandsLR (mono.data(), srcN, sampleRate, edges);
+                        std::vector<float> accMono ((std::size_t) outN, 0.0f);
+
+                        for (std::size_t bi = 0; bi < bands.size() && ! cancel.load(); ++bi)
+                        {
+                            const auto& band = bands[bi];
+                            double se = 0.0; for (float v : band) se += (double) v * v;
+                            const float srcRms = (float) std::sqrt (se / juce::jmax (1, srcN));
+                            if (srcRms < 1.0e-7f) continue; // silent band
+
+                            juce::AudioBuffer<float> bandBuf (1, srcN);
+                            std::copy (band.begin(), band.end(), bandBuf.getWritePointer (0));
+                            auto bandModel = analyze (thr, bandBuf, false, /*updateStatus*/ false);
+                            if (bandModel == nullptr) continue;
+
+                            engine::model::RenderSettings sb = s;
+                            sb.targetChannels = 1;
+                            sb.seed = s.seed ^ (0x9E3779B97F4A7C15ULL * (std::uint64_t) (bi + 1));
+                            auto br = renderer.render (*bandModel, sb, cancel);
+                            if (! br.ok() || br.value().channels.empty()) continue;
+                            const auto& bc = br.value().channels[0];
+
+                            // Match each band back to the source band's level, then sum -> the
+                            // composite keeps the room's spectral balance (LR bands sum flat).
+                            double oe = 0.0; for (float v : bc) oe += (double) v * v;
+                            const float outRms = (float) std::sqrt (oe / juce::jmax (1, (int) bc.size()));
+                            const float g = outRms > 1.0e-9f ? srcRms / outRms : 0.0f;
+                            const int m2 = juce::jmin (outN, (int) bc.size());
+                            for (int i = 0; i < m2; ++i) accMono[(std::size_t) i] += bc[(std::size_t) i] * g;
+                        }
+
+                        if (! cancel.load()) { chans.assign ((std::size_t) effCh, accMono); haveChans = true; }
+                    }
+                    araLog ("spectral render: bands=" + juce::String ((int) edges.size() + 1)
+                            + " outN=" + juce::String (outN));
+                }
+                else
+                {
+                    auto out = renderer.render (*model, s, cancel);
+                    if (out.ok()) { chans = std::move (out.value().channels); haveChans = true; }
+                }
+
+                if (haveChans)
+                {
                     // Make the loop seamless: blend the continuation tail [loopLen, loopLen+xf)
                     // back over the head [0, xf), so wrapping loopLen-1 -> 0 has no click.
                     for (auto& c : chans)

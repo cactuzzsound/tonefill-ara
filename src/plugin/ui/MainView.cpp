@@ -60,8 +60,6 @@ MainView::MainView (PluginProcessor& processor) : processor_ (processor)
     minFill_.slider.setRange (0.2, 5.0, 0.05); minFill_.slider.setTextValueSuffix (" s");
     initKnob (*this, flatness_, "Flatness",
               "How strict the stationarity requirement is. Higher = only very steady stretches, so the fill avoids audible jumps.", LNF::purple());
-    initKnob (*this, fragment_, "Chunk Size",
-              "Length of each real chunk taken from the source. Longer = more natural texture, shorter = smoother but more repetitive.", LNF::purple());
     initKnob (*this, blend_, "Crossfade",
               "How much neighbouring chunks overlap and blend. Higher = smoother joins.", LNF::purple());
     initKnob (*this, variation_, "Smoothness",
@@ -74,7 +72,6 @@ MainView::MainView (PluginProcessor& processor) : processor_ (processor)
 
     thA_ = std::make_unique<SA> (apvts, IDs::threshold,    threshold_.slider);
     spA_ = std::make_unique<SA> (apvts, IDs::speechReject, speech_.slider);
-    frA_ = std::make_unique<SA> (apvts, IDs::fragment,     fragment_.slider);
     blA_ = std::make_unique<SA> (apvts, IDs::blend,        blend_.slider);
     vaA_ = std::make_unique<SA> (apvts, IDs::randomness,   variation_.slider);
     mfA_ = std::make_unique<SA> (apvts, IDs::minFill,      minFill_.slider);
@@ -99,6 +96,10 @@ MainView::MainView (PluginProcessor& processor) : processor_ (processor)
     wholeBtn_.setTooltip ("Analyze the WHOLE item to find clean room tone scattered across a long take. Off = the first 4 minutes.");
     addAndMakeVisible (wholeBtn_);
     wfA_ = std::make_unique<BA> (apvts, IDs::wholeFile, wholeBtn_);
+    spectralBtn_.setClickingTogglesState (true);
+    spectralBtn_.setTooltip ("Spectral (experimental): split the source into frequency bands, find clean room tone in each band separately, and recombine. Steadier low end, more usable material. Slower to render.");
+    addAndMakeVisible (spectralBtn_);
+    scA_ = std::make_unique<BA> (apvts, IDs::spectral, spectralBtn_);
 
     // Selection engine: Classic vs Experimental (statistical scoring). Driven manually on the param.
     for (auto* b : { &classicBtn_, &expBtn_ }) { b->setClickingTogglesState (false); addAndMakeVisible (*b); }
@@ -192,7 +193,7 @@ void MainView::updateEmphasis()
     auto set = [] (Knob& k, bool on) { const float a = on ? 1.0f : 0.34f; k.slider.setAlpha (a); k.label.setAlpha (a); };
     const bool enhance = processor_.parameters().apvts.getRawParameterValue (IDs::paulStretch)->load() > 0.5f;
     set (threshold_, true); set (speech_, true); set (minFill_, true); set (flatness_, true);
-    set (fragment_, ! enhance); set (blend_, ! enhance);
+    set (blend_, ! enhance);
     set (variation_, enhance);
     set (gain_, true); set (length_, true);
 }
@@ -261,6 +262,7 @@ void MainView::paint (juce::Graphics& g)
         g.drawRoundedRectangle (u, 9.0f, 1.0f);
     };
     groupBg (autoBtn_.getBounds(), manualBtn_.getBounds());
+    groupBg (spectralBtn_.getBounds(), spectralBtn_.getBounds());
     groupBg (enhanceBtn_.getBounds(), wholeBtn_.getBounds());
     groupBg (classicBtn_.getBounds(), expBtn_.getBounds());
 
@@ -461,6 +463,8 @@ void MainView::resized()
         head.removeFromRight (10);
         auto learn = head.removeFromRight (130).withSizeKeepingCentre (130, 26);
         place (autoBtn_, manualBtn_, learn);
+        head.removeFromRight (10);
+        spectralBtn_.setBounds (head.removeFromRight (96).withSizeKeepingCentre (96, 26));
     }
     r.removeFromTop (12);
 
@@ -470,7 +474,13 @@ void MainView::resized()
     meterArea_ = main.removeFromRight (96);
     main.removeFromRight (12);
     const int gap = 12, cardW = (main.getWidth() - 2 * gap) / 3;
-    Knob* groups[3][3] = { { &threshold_, &speech_, &minFill_ }, { &flatness_, &fragment_, &blend_ }, { &variation_, &gain_, &length_ } };
+    // STRUCTURE lost Chunk Size, so it carries 2 knobs; cards can hold a variable count and centre
+    // themselves against the uniform 3-slot width so knob sizes stay identical across cards.
+    std::vector<std::vector<Knob*>> groups = {
+        { &threshold_, &speech_, &minFill_ },
+        { &flatness_, &blend_ },
+        { &variation_, &gain_, &length_ }
+    };
     for (int i = 0; i < 3; ++i)
     {
         auto card = main.removeFromLeft (i < 2 ? cardW : main.getWidth());
@@ -478,14 +488,16 @@ void MainView::resized()
         groupCard_[(std::size_t) i] = card;
         auto body = card.reduced (8, 0).withTrimmedTop (34);
         const int kw = body.getWidth() / 3;
-        for (int j = 0; j < 3; ++j)
+        const int count = (int) groups[(std::size_t) i].size();
+        if (count < 3) body.removeFromLeft ((3 - count) * kw / 2); // centre a short card
+        for (int j = 0; j < count; ++j)
         {
-            auto cell = body.removeFromLeft (j < 2 ? kw : body.getWidth());
+            auto cell = body.removeFromLeft (kw);
             auto inner = cell.reduced (4, 6);
             inner.removeFromTop (0);
             auto lab = inner.removeFromTop (14);
-            groups[i][j]->label.setBounds (lab);
-            groups[i][j]->slider.setBounds (inner);
+            groups[(std::size_t) i][(std::size_t) j]->label.setBounds (lab);
+            groups[(std::size_t) i][(std::size_t) j]->slider.setBounds (inner);
             valuePills_.push_back (inner.removeFromBottom (20).reduced (10, 1));
         }
     }
@@ -572,6 +584,7 @@ void MainView::loadParamsFromState (SessionState& ss)
     setB (IDs::normUnit,     ss.normalizeLufs.load());
     setB (IDs::wholeFile,    ss.wholeFile.load());
     setB (IDs::statistical,  ss.statisticalMode.load());
+    setB (IDs::spectral,     ss.spectralMode.load());
     setB (IDs::hissFilter,   ss.hissFilter.load());
     setF (IDs::hissFreq,     ss.hissFreq.load());
     setF (IDs::hissQ,        ss.hissQ.load());
@@ -633,6 +646,7 @@ void MainView::timerCallback()
     mirror (ss.minFill,      apvts.getRawParameterValue (IDs::minFill)->load());
     mirror (ss.flatness,     apvts.getRawParameterValue (IDs::flatness)->load());
     mirrorB (ss.paulStretch, apvts.getRawParameterValue (IDs::paulStretch)->load() > 0.5f);
+    mirrorB (ss.spectralMode, apvts.getRawParameterValue (IDs::spectral)->load() > 0.5f); // re-render on toggle
     if (changed) ss.generation.fetch_add (1);
     ss.outputGain.store (juce::Decibels::decibelsToGain (apvts.getRawParameterValue (IDs::outputGain)->load()));
     ss.renderLength.store (apvts.getRawParameterValue (IDs::renderLength)->load());
