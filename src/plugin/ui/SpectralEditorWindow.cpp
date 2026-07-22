@@ -86,6 +86,7 @@ public:
         tHi_ = tLo_ + span; displayDirty_ = true; repaint();
     }
     void setPanSpeed (float s) { panSpeed_ = juce::jlimit (0.1f, 5.0f, s); }
+    void setBright (float b) { bright_ = juce::jlimit (0.3f, 4.0f, b); displayDirty_ = true; repaint(); }
 
     //== spectrogram build =====================================================
     void rebuildSpectrogram()
@@ -195,7 +196,7 @@ public:
                 const float v11 = grid_[(std::size_t) f1 * numBins_ + b1];
                 const float v = (v00 * (1.0f - bf) + v01 * bf) * (1.0f - ff)
                               + (v10 * (1.0f - bf) + v11 * bf) * ff;
-                bmp.setPixelColour (px, py, heat (v));
+                bmp.setPixelColour (px, py, heat (juce::jlimit (0.0f, 1.0f, v * bright_)));
             }
         }
     }
@@ -245,7 +246,23 @@ public:
             g.drawText (freqLabel (hz), 4, (int) y - 6, 40, 12, juce::Justification::centredRight, false);
         }
 
-        // band edges (draggable), with the band index between them.
+        // Band index labels: one per band (regions between edges, plus below the first / above the last).
+        {
+            std::vector<double> bounds; bounds.push_back (fLo_);
+            for (float e : edges_) bounds.push_back (e);
+            bounds.push_back (fHi_);
+            g.setFont (juce::Font (11.0f, juce::Font::bold));
+            for (int b = 0; b + 1 < (int) bounds.size(); ++b)
+            {
+                const double c = std::sqrt (juce::jmax (1.0, bounds[(std::size_t) b]) * juce::jmax (1.0, bounds[(std::size_t) b + 1]));
+                if (c < fLo_ || c > fHi_) continue;
+                const float y = freqToY (c);
+                g.setColour (juce::Colours::white.withAlpha (0.6f));
+                g.drawText ("B" + juce::String (b + 1), a.getX() + 6, (int) y - 8, 34, 16, juce::Justification::centredLeft, false);
+            }
+        }
+
+        // band edges (draggable).
         for (int i = 0; i < (int) edges_.size(); ++i)
         {
             const float y = freqToY (edges_[(std::size_t) i]);
@@ -328,7 +345,7 @@ private:
     double fLo_ = 20.0, fHi_ = 20.0, tLo_ = 0.0, tHi_ = 1.0; // fHi_<=20 => not yet fitted
     std::vector<float> edges_; int dragEdge_ = -1;
     juce::Point<int> panLast_;
-    float panSpeed_ = 1.0f;
+    float panSpeed_ = 1.0f, bright_ = 1.0f;
 };
 
 //==============================================================================
@@ -360,6 +377,20 @@ public:
         speedLbl_.setJustificationType (juce::Justification::centred);
         addAndMakeVisible (speedLbl_);
 
+        bright_.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
+        bright_.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+        bright_.setRange (0.3, 4.0, 0.05);
+        bright_.setSkewFactorFromMidPoint (1.0);
+        bright_.setValue (1.0, juce::dontSendNotification);
+        bright_.setTooltip ("Spectrogram brightness - lift quiet detail when zoomed in.");
+        bright_.onValueChange = [this] { view_.setBright ((float) bright_.getValue()); };
+        addAndMakeVisible (bright_);
+        brightLbl_.setText ("Bright", juce::dontSendNotification);
+        brightLbl_.setFont (juce::Font (10.0f));
+        brightLbl_.setColour (juce::Label::textColourId, LNF::muted());
+        brightLbl_.setJustificationType (juce::Justification::centred);
+        addAndMakeVisible (brightLbl_);
+
         hint_.setText ("Drag lines = set band edges. Drag canvas = pan. Wheel = up/down, side-wheel = left/right. "
                        "H/V buttons zoom. Band count follows the Bands knob.",
                        juce::dontSendNotification);
@@ -378,6 +409,9 @@ public:
         tb.removeFromLeft (8);
         speedLbl_.setBounds (tb.removeFromLeft (34));
         speed_.setBounds (tb.removeFromLeft (26).withSizeKeepingCentre (24, 24));
+        tb.removeFromLeft (8);
+        brightLbl_.setBounds (tb.removeFromLeft (34));
+        bright_.setBounds (tb.removeFromLeft (26).withSizeKeepingCentre (24, 24));
         tb.removeFromLeft (10);
         hint_.setBounds (tb);
         view_.setBounds (r.reduced (6, 4));
@@ -387,8 +421,8 @@ public:
 private:
     SpectralView view_;
     juce::TextButton hInBtn_, hOutBtn_, vInBtn_, vOutBtn_, fitBtn_;
-    juce::Slider speed_;
-    juce::Label speedLbl_, hint_;
+    juce::Slider speed_, bright_;
+    juce::Label speedLbl_, brightLbl_, hint_;
 };
 
 //==============================================================================
