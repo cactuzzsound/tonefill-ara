@@ -54,6 +54,38 @@ public:
         displayDirty_ = true; repaint();
     }
 
+    // Zoom (physical buttons). factor < 1 = zoom in, > 1 = zoom out; around the current centre.
+    void zoomFreq (double factor)
+    {
+        const double cf = std::sqrt (fLo_ * fHi_); // geometric centre
+        double ratio = juce::jlimit (2.0, 3000.0, std::pow (fHi_ / fLo_, factor));
+        double lo = juce::jmax (15.0, cf / std::sqrt (ratio));
+        double hi = juce::jmin (nyquist_, cf * std::sqrt (ratio));
+        if (hi / lo > 1.3) { fLo_ = lo; fHi_ = hi; displayDirty_ = true; repaint(); }
+    }
+    void zoomTime (double factor)
+    {
+        const double c = (tLo_ + tHi_) * 0.5;
+        const double span = juce::jlimit (0.01, 1.0, (tHi_ - tLo_) * factor);
+        tLo_ = juce::jlimit (0.0, 1.0 - span, c - span * 0.5);
+        tHi_ = tLo_ + span; displayDirty_ = true; repaint();
+    }
+    // Pan. panFreq: +octaves moves the view up; panTime: +frac moves it right.
+    void panFreq (double octaves)
+    {
+        const double f = std::pow (2.0, octaves);
+        double lo = fLo_ * f, hi = fHi_ * f;
+        if (hi > nyquist_) { const double k = nyquist_ / hi; lo *= k; hi *= k; }
+        if (lo < 15.0)      { const double k = 15.0 / lo;     lo *= k; hi *= k; }
+        fLo_ = lo; fHi_ = juce::jmin (nyquist_, hi); displayDirty_ = true; repaint();
+    }
+    void panTime (double frac)
+    {
+        const double span = tHi_ - tLo_;
+        tLo_ = juce::jlimit (0.0, 1.0 - span, tLo_ + frac * span);
+        tHi_ = tLo_ + span; displayDirty_ = true; repaint();
+    }
+
     //== spectrogram build =====================================================
     void rebuildSpectrogram()
     {
@@ -214,43 +246,45 @@ public:
     void mouseMove (const juce::MouseEvent& e) override
     { setMouseCursor (edgeAt (e.getPosition()) >= 0 ? juce::MouseCursor::UpDownResizeCursor : juce::MouseCursor::NormalCursor); }
 
-    void mouseDown (const juce::MouseEvent& e) override { dragEdge_ = edgeAt (e.getPosition()); repaint(); }
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        dragEdge_ = edgeAt (e.getPosition());
+        panLast_ = e.getPosition();
+        if (dragEdge_ < 0) setMouseCursor (juce::MouseCursor::DraggingHandCursor);
+        repaint();
+    }
 
     void mouseDrag (const juce::MouseEvent& e) override
     {
-        if (dragEdge_ < 0) return;
-        double hz = yToFreq ((float) e.y);
-        const double lo = dragEdge_ > 0 ? edges_[(std::size_t) dragEdge_ - 1] + 1.0 : 20.0;
-        const double hi = dragEdge_ + 1 < (int) edges_.size() ? edges_[(std::size_t) dragEdge_ + 1] - 1.0 : nyquist_ - 1.0;
-        edges_[(std::size_t) dragEdge_] = (float) juce::jlimit (lo, hi, hz);
-        repaint();
+        if (dragEdge_ >= 0)
+        {
+            const double hz = yToFreq ((float) e.y);
+            const double lo = dragEdge_ > 0 ? edges_[(std::size_t) dragEdge_ - 1] + 1.0 : 20.0;
+            const double hi = dragEdge_ + 1 < (int) edges_.size() ? edges_[(std::size_t) dragEdge_ + 1] - 1.0 : nyquist_ - 1.0;
+            edges_[(std::size_t) dragEdge_] = (float) juce::jlimit (lo, hi, hz);
+            repaint();
+            return;
+        }
+        // Grab-pan the canvas: the content follows the cursor.
+        const auto a = plot();
+        const int dx = e.x - panLast_.x, dy = e.y - panLast_.y;
+        panLast_ = e.getPosition();
+        const double octPerPx = std::log2 (fHi_ / fLo_) / (double) juce::jmax (1, a.getHeight());
+        panFreq (-dy * octPerPx); // drag down -> view moves to lower freqs (content follows)
+        const double fracPerPx = (tHi_ - tLo_) / (double) juce::jmax (1, a.getWidth());
+        panTime (-dx * fracPerPx); // drag right -> view moves earlier (content follows)
     }
-    void mouseUp (const juce::MouseEvent&) override { if (dragEdge_ >= 0) { dragEdge_ = -1; commitEdges(); repaint(); } }
-
-    void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w) override
+    void mouseUp (const juce::MouseEvent&) override
     {
-        if (e.mods.isShiftDown())
-        {
-            // time zoom around the cursor
-            const auto a = plot();
-            const double cx = tLo_ + (double) (e.x - a.getX()) / juce::jmax (1, a.getWidth()) * (tHi_ - tLo_);
-            const double factor = w.deltaY > 0 ? 1.0 / 1.25 : 1.25;
-            const double span = juce::jlimit (0.02, 1.0, (tHi_ - tLo_) * factor);
-            tLo_ = juce::jlimit (0.0, 1.0 - span, cx - (cx - tLo_) * factor);
-            tHi_ = tLo_ + span;
-        }
-        else
-        {
-            // frequency zoom around the cursor
-            const double cf = yToFreq ((float) e.y);
-            const double factor = w.deltaY > 0 ? 1.0 / 1.25 : 1.25;
-            double ratio = std::pow (fHi_ / fLo_, factor);
-            ratio = juce::jlimit (2.0, 2000.0, ratio); // clamp total span
-            double lo = cf / std::sqrt (ratio), hi = cf * std::sqrt (ratio);
-            lo = juce::jmax (15.0, lo); hi = juce::jmin (nyquist_, hi);
-            if (hi / lo > 1.5) { fLo_ = lo; fHi_ = hi; }
-        }
-        displayDirty_ = true; repaint();
+        setMouseCursor (juce::MouseCursor::NormalCursor);
+        if (dragEdge_ >= 0) { dragEdge_ = -1; commitEdges(); repaint(); }
+    }
+
+    void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails& w) override
+    {
+        // Main wheel = pan up/down (frequency); side wheel = pan left/right (time). No zoom on wheel.
+        if (std::abs (w.deltaX) > std::abs (w.deltaY)) panTime (-w.deltaX * 0.35);
+        else                                          panFreq (w.deltaY * 0.5);
     }
 
     void resized() override { displayDirty_ = true; }
@@ -270,6 +304,7 @@ private:
     juce::Image display_; bool displayDirty_ = true;
     double fLo_ = 20.0, fHi_ = 20.0, tLo_ = 0.0, tHi_ = 1.0; // fHi_<=20 => not yet fitted
     std::vector<float> edges_; int dragEdge_ = -1;
+    juce::Point<int> panLast_;
 };
 
 //==============================================================================
@@ -279,12 +314,15 @@ public:
     explicit SpectralContent (SessionState& s) : view_ (s)
     {
         addAndMakeVisible (view_);
-        fitBtn_.setButtonText ("Fit");
-        fitBtn_.setTooltip ("Reset zoom to the full spectrum.");
-        fitBtn_.onClick = [this] { view_.fit(); };
-        addAndMakeVisible (fitBtn_);
-        hint_.setText ("Drag the white lines to set each band's frequency edge. "
-                       "Wheel = zoom frequency, Shift+wheel = zoom time. Band count follows the Bands knob.",
+        auto addBtn = [this] (juce::TextButton& b, const juce::String& t, const juce::String& tip, std::function<void()> fn)
+        { b.setButtonText (t); b.setTooltip (tip); b.onClick = std::move (fn); addAndMakeVisible (b); };
+        addBtn (hInBtn_,  "H +", "Zoom in on time",       [this] { view_.zoomTime (1.0 / 1.5); });
+        addBtn (hOutBtn_, "H -", "Zoom out on time",      [this] { view_.zoomTime (1.5); });
+        addBtn (vInBtn_,  "V +", "Zoom in on frequency",  [this] { view_.zoomFreq (1.0 / 1.5); });
+        addBtn (vOutBtn_, "V -", "Zoom out on frequency", [this] { view_.zoomFreq (1.5); });
+        addBtn (fitBtn_,  "Fit", "Reset zoom to the full spectrum.", [this] { view_.fit(); });
+        hint_.setText ("Drag lines = set band edges. Drag canvas = pan. Wheel = up/down, side-wheel = left/right. "
+                       "H/V buttons zoom. Band count follows the Bands knob.",
                        juce::dontSendNotification);
         hint_.setFont (juce::Font (11.5f));
         hint_.setColour (juce::Label::textColourId, LNF::muted());
@@ -296,8 +334,9 @@ public:
     {
         auto r = getLocalBounds();
         auto tb = r.removeFromTop (30).reduced (6, 4);
-        fitBtn_.setBounds (tb.removeFromLeft (60));
-        tb.removeFromLeft (12);
+        for (auto* b : { &hInBtn_, &hOutBtn_, &vInBtn_, &vOutBtn_, &fitBtn_ })
+        { b->setBounds (tb.removeFromLeft (46)); tb.removeFromLeft (4); }
+        tb.removeFromLeft (8);
         hint_.setBounds (tb);
         view_.setBounds (r.reduced (6, 4));
     }
@@ -305,7 +344,7 @@ public:
 
 private:
     SpectralView view_;
-    juce::TextButton fitBtn_;
+    juce::TextButton hInBtn_, hOutBtn_, vInBtn_, vOutBtn_, fitBtn_;
     juce::Label hint_;
 };
 
