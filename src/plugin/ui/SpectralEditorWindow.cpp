@@ -85,6 +85,7 @@ public:
         tLo_ = juce::jlimit (0.0, 1.0 - span, tLo_ + frac * span);
         tHi_ = tLo_ + span; displayDirty_ = true; repaint();
     }
+    void setPanSpeed (float s) { panSpeed_ = juce::jlimit (0.1f, 5.0f, s); }
 
     //== spectrogram build =====================================================
     void rebuildSpectrogram()
@@ -99,8 +100,8 @@ public:
         const int n = (int) (*src)[0].size();
         nyquist_ = sr * 0.5; sr_ = sr;
 
-        const int order = 10, fftSize = 1 << order;              // 1024
-        const int hop = juce::jmax (fftSize / 2, n / 4000 + 1);  // cap ~4000 frames
+        const int order = 12, fftSize = 1 << order;             // 4096 -> ~11.7 Hz bins @48k, fine detail
+        const int hop = juce::jmax (fftSize / 8, n / 8000 + 1); // 87.5% overlap, cap ~8000 frames
         numBins_ = fftSize / 2 + 1;
         binHz_   = sr / fftSize;
         const int frames = juce::jmax (1, (n - fftSize) / hop + 1);
@@ -161,18 +162,40 @@ public:
 
         display_ = juce::Image (juce::Image::RGB, a.getWidth(), a.getHeight(), false);
         juce::Image::BitmapData bmp (display_, juce::Image::BitmapData::writeOnly);
+
+        // Precompute the time (frame) coordinate per column.
+        std::vector<int>   f0s ((std::size_t) a.getWidth());
+        std::vector<int>   f1s ((std::size_t) a.getWidth());
+        std::vector<float> ffr ((std::size_t) a.getWidth());
+        for (int px = 0; px < a.getWidth(); ++px)
+        {
+            const double tf = tLo_ + (double) px / juce::jmax (1, a.getWidth()) * (tHi_ - tLo_);
+            const double ff = juce::jlimit (0.0, (double) (numFrames_ - 1), tf * (numFrames_ - 1));
+            const int f0 = (int) ff;
+            f0s[(std::size_t) px] = f0;
+            f1s[(std::size_t) px] = juce::jmin (numFrames_ - 1, f0 + 1);
+            ffr[(std::size_t) px] = (float) (ff - f0);
+        }
+
+        // Bilinear over (frame, bin) with log-frequency y -> smooth, accurate at any zoom.
         for (int py = 0; py < a.getHeight(); ++py)
         {
-            const double hz  = yToFreq ((float) (a.getY() + py));
-            const double binf = hz / binHz_;
-            const int    b0  = juce::jlimit (0, numBins_ - 1, (int) binf);
+            const double hz   = yToFreq ((float) (a.getY() + py));
+            const double binf = juce::jlimit (0.0, (double) (numBins_ - 1), hz / binHz_);
+            const int    b0   = (int) binf;
+            const int    b1   = juce::jmin (numBins_ - 1, b0 + 1);
+            const float  bf   = (float) (binf - b0);
             for (int px = 0; px < a.getWidth(); ++px)
             {
-                const double tf = tLo_ + (double) px / juce::jmax (1, a.getWidth()) * (tHi_ - tLo_);
-                const int f0 = juce::jlimit (0, numFrames_ - 1, (int) (tf * (numFrames_ - 1)));
-                const float v = grid_[(std::size_t) f0 * numBins_ + b0];
-                const auto c = heat (v);
-                bmp.setPixelColour (px, py, c);
+                const int f0 = f0s[(std::size_t) px], f1 = f1s[(std::size_t) px];
+                const float ff = ffr[(std::size_t) px];
+                const float v00 = grid_[(std::size_t) f0 * numBins_ + b0];
+                const float v01 = grid_[(std::size_t) f0 * numBins_ + b1];
+                const float v10 = grid_[(std::size_t) f1 * numBins_ + b0];
+                const float v11 = grid_[(std::size_t) f1 * numBins_ + b1];
+                const float v = (v00 * (1.0f - bf) + v01 * bf) * (1.0f - ff)
+                              + (v10 * (1.0f - bf) + v11 * bf) * ff;
+                bmp.setPixelColour (px, py, heat (v));
             }
         }
     }
@@ -283,8 +306,8 @@ public:
     void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails& w) override
     {
         // Main wheel = pan up/down (frequency); side wheel = pan left/right (time). No zoom on wheel.
-        if (std::abs (w.deltaX) > std::abs (w.deltaY)) panTime (-w.deltaX * 0.35);
-        else                                          panFreq (w.deltaY * 0.5);
+        if (std::abs (w.deltaX) > std::abs (w.deltaY)) panTime (-w.deltaX * 0.35 * panSpeed_);
+        else                                          panFreq (w.deltaY * 0.5 * panSpeed_);
     }
 
     void resized() override { displayDirty_ = true; }
@@ -305,6 +328,7 @@ private:
     double fLo_ = 20.0, fHi_ = 20.0, tLo_ = 0.0, tHi_ = 1.0; // fHi_<=20 => not yet fitted
     std::vector<float> edges_; int dragEdge_ = -1;
     juce::Point<int> panLast_;
+    float panSpeed_ = 1.0f;
 };
 
 //==============================================================================
@@ -321,6 +345,21 @@ public:
         addBtn (vInBtn_,  "V +", "Zoom in on frequency",  [this] { view_.zoomFreq (1.0 / 1.5); });
         addBtn (vOutBtn_, "V -", "Zoom out on frequency", [this] { view_.zoomFreq (1.5); });
         addBtn (fitBtn_,  "Fit", "Reset zoom to the full spectrum.", [this] { view_.fit(); });
+
+        speed_.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
+        speed_.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+        speed_.setRange (0.2, 4.0, 0.05);
+        speed_.setSkewFactorFromMidPoint (1.0);
+        speed_.setValue (1.0, juce::dontSendNotification);
+        speed_.setTooltip ("Wheel pan speed (timeline + frequency).");
+        speed_.onValueChange = [this] { view_.setPanSpeed ((float) speed_.getValue()); };
+        addAndMakeVisible (speed_);
+        speedLbl_.setText ("Speed", juce::dontSendNotification);
+        speedLbl_.setFont (juce::Font (10.0f));
+        speedLbl_.setColour (juce::Label::textColourId, LNF::muted());
+        speedLbl_.setJustificationType (juce::Justification::centred);
+        addAndMakeVisible (speedLbl_);
+
         hint_.setText ("Drag lines = set band edges. Drag canvas = pan. Wheel = up/down, side-wheel = left/right. "
                        "H/V buttons zoom. Band count follows the Bands knob.",
                        juce::dontSendNotification);
@@ -337,6 +376,9 @@ public:
         for (auto* b : { &hInBtn_, &hOutBtn_, &vInBtn_, &vOutBtn_, &fitBtn_ })
         { b->setBounds (tb.removeFromLeft (46)); tb.removeFromLeft (4); }
         tb.removeFromLeft (8);
+        speedLbl_.setBounds (tb.removeFromLeft (34));
+        speed_.setBounds (tb.removeFromLeft (26).withSizeKeepingCentre (24, 24));
+        tb.removeFromLeft (10);
         hint_.setBounds (tb);
         view_.setBounds (r.reduced (6, 4));
     }
@@ -345,7 +387,8 @@ public:
 private:
     SpectralView view_;
     juce::TextButton hInBtn_, hOutBtn_, vInBtn_, vOutBtn_, fitBtn_;
-    juce::Label hint_;
+    juce::Slider speed_;
+    juce::Label speedLbl_, hint_;
 };
 
 //==============================================================================
