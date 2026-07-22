@@ -13,7 +13,7 @@ namespace
 // can be skipped and a future format extended without desyncing the stream.
 constexpr int kArchiveMagic  = 0x54464152; // 'TFAR'
 constexpr int kArchiveVer    = 1;
-constexpr int kParamBlockVer = 3; // v2 = +spectralMode/+spectralBands; v3 = +spectralAdvanced/Lo/Hi
+constexpr int kParamBlockVer = 4; // v2=+spectralMode/Bands; v3=+advanced/Lo/Hi; v4=+spectral edges
 
 void writeParamBlock (juce::OutputStream& os, plugin::SessionState& ss)
 {
@@ -48,6 +48,9 @@ void writeParamBlock (juce::OutputStream& os, plugin::SessionState& ss)
     os.writeBool  (ss.spectralAdvanced.load()); // v3+
     os.writeFloat (ss.spectralLoHz.load());
     os.writeFloat (ss.spectralHiHz.load());
+    const auto edges = ss.getSpectralEdges();   // v4+
+    os.writeInt ((int) edges.size());
+    for (float f : edges) os.writeFloat (f);
 }
 
 bool readParamBlock (juce::InputStream& is, plugin::SessionState& ss)
@@ -92,6 +95,15 @@ bool readParamBlock (juce::InputStream& is, plugin::SessionState& ss)
         ss.spectralAdvanced.store (is.readBool());
         ss.spectralLoHz.store (juce::jlimit (20.0f, 20000.0f, is.readFloat()));
         ss.spectralHiHz.store (juce::jlimit (20.0f, 22000.0f, is.readFloat()));
+    }
+    if (ver >= 4)
+    {
+        const int ne = is.readInt();
+        if (ne < 0 || ne > 32) return false;
+        std::vector<float> edges;
+        edges.reserve ((std::size_t) ne);
+        for (int i = 0; i < ne; ++i) edges.push_back (juce::jlimit (20.0f, 22000.0f, is.readFloat()));
+        ss.setSpectralEdges (std::move (edges));
     }
 
     ss.paramsEpoch.fetch_add (1);  // editor reloads the knobs

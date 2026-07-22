@@ -1,5 +1,6 @@
 #include "plugin/ui/MainView.h"
 #include "plugin/ui/WaveformWindow.h"
+#include "plugin/ui/SpectralEditorWindow.h"
 #include "plugin/PluginProcessor.h"
 #include "plugin/ParameterState.h"
 #include "dsp/Loudness.h"
@@ -62,12 +63,6 @@ MainView::MainView (PluginProcessor& processor) : processor_ (processor)
               "How strict the stationarity requirement is. Higher = only very steady stretches, so the fill avoids audible jumps.", LNF::purple());
     initKnob (*this, bands_, "Bands",
               "Spectral only: how many frequency bands the source is split into. Fewer = wider bands, more = narrower bands.", LNF::purple());
-    initKnob (*this, lo_, "Low",
-              "Spectral Advanced: lowest crossover frequency. Bands are spread from here up to High.", LNF::purple());
-    lo_.slider.setRange (30.0, 2000.0, 1.0); lo_.slider.setTextValueSuffix (" Hz");
-    initKnob (*this, hi_, "High",
-              "Spectral Advanced: highest crossover frequency. Bands are spread from Low up to here.", LNF::purple());
-    hi_.slider.setRange (2000.0, 18000.0, 1.0); hi_.slider.setTextValueSuffix (" Hz");
     initKnob (*this, blend_, "Crossfade",
               "How much neighbouring chunks overlap and blend. Higher = smoother joins.", LNF::purple());
     initKnob (*this, variation_, "Smoothness",
@@ -82,8 +77,6 @@ MainView::MainView (PluginProcessor& processor) : processor_ (processor)
     spA_ = std::make_unique<SA> (apvts, IDs::speechReject, speech_.slider);
     blA_ = std::make_unique<SA> (apvts, IDs::blend,        blend_.slider);
     sbA_ = std::make_unique<SA> (apvts, IDs::spectralBands, bands_.slider);
-    loA_ = std::make_unique<SA> (apvts, IDs::spectralLo,    lo_.slider);
-    hiA_ = std::make_unique<SA> (apvts, IDs::spectralHi,    hi_.slider);
     vaA_ = std::make_unique<SA> (apvts, IDs::randomness,   variation_.slider);
     mfA_ = std::make_unique<SA> (apvts, IDs::minFill,      minFill_.slider);
     flA_ = std::make_unique<SA> (apvts, IDs::flatness,     flatness_.slider);
@@ -126,9 +119,10 @@ MainView::MainView (PluginProcessor& processor) : processor_ (processor)
         spectralBtn_.onClick = [setMode] { setMode (false, true);  };
     }
     advBtn_.setClickingTogglesState (true);
-    advBtn_.setTooltip ("Spectral Advanced: choose the frequency range (Low..High) the bands are spread across, instead of the default 150-8000 Hz.");
+    advBtn_.setTooltip ("Spectral Advanced: open a spectrum editor to place each band's frequency edges by hand on a spectrogram of the source.");
     addAndMakeVisible (advBtn_);
     adA_ = std::make_unique<BA> (apvts, IDs::spectralAdv, advBtn_);
+    advBtn_.onClick = [this] { if (advBtn_.getToggleState()) openSpectralWindow(); };
 
     expandBtn_.setTooltip ("Open a large waveform view with a timecode ruler, zoom and scroll for precise selecting.");
     expandBtn_.onClick = [this] { openWaveformWindow(); };
@@ -209,6 +203,12 @@ void MainView::openWaveformWindow()
 {
     if (waveWin_ == nullptr) { waveWin_ = std::make_unique<WaveformWindow> (processor_.sessionState()); waveWin_->onClose = [this] { waveWin_.reset(); }; }
     else waveWin_->toFront (true);
+}
+
+void MainView::openSpectralWindow()
+{
+    if (specWin_ == nullptr) { specWin_ = std::make_unique<SpectralEditorWindow> (processor_.sessionState()); specWin_->onClose = [this] { specWin_.reset(); }; }
+    else specWin_->toFront (true);
 }
 
 void MainView::updateEmphasis()
@@ -499,18 +499,10 @@ void MainView::resized()
     meterArea_ = main.removeFromRight (96);
     main.removeFromRight (12);
     const int gap = 12, cardW = (main.getWidth() - 2 * gap) / 3;
-    // Cards hold a variable knob count and centre against the 3-slot width. In Spectral+Advanced the
-    // STRUCTURE card also carries the Low/High band-range knobs (5 knobs, sized to fit).
-    auto& apvtsL = processor_.parameters().apvts;
-    const bool specL = apvtsL.getRawParameterValue (IDs::spectral)->load() > 0.5f;
-    const bool advL  = apvtsL.getRawParameterValue (IDs::spectralAdv)->load() > 0.5f;
-    const bool showAdv = specL && advL;
-    lo_.slider.setVisible (showAdv); lo_.label.setVisible (showAdv);
-    hi_.slider.setVisible (showAdv); hi_.label.setVisible (showAdv);
+    // Cards hold a variable knob count and centre against the 3-slot width.
     std::vector<std::vector<Knob*>> groups = {
         { &threshold_, &speech_, &minFill_ },
-        showAdv ? std::vector<Knob*> { &flatness_, &bands_, &lo_, &hi_, &blend_ }
-                : std::vector<Knob*> { &flatness_, &bands_, &blend_ },
+        { &flatness_, &bands_, &blend_ },
         { &variation_, &gain_, &length_ }
     };
     for (int i = 0; i < 3; ++i)
@@ -624,8 +616,6 @@ void MainView::loadParamsFromState (SessionState& ss)
     setF (IDs::hissQ,        ss.hissQ.load());
     setF (IDs::spectralBands, (float) ss.spectralBands.load());
     setB (IDs::spectralAdv,   ss.spectralAdvanced.load());
-    setF (IDs::spectralLo,    ss.spectralLoHz.load());
-    setF (IDs::spectralHi,    ss.spectralHiHz.load());
 
     // Auto/Manual is not an APVTS parameter (it drives the waveform selection UI).
     manualMode_ = ss.manualMode.load();
@@ -688,8 +678,6 @@ void MainView::timerCallback()
     { const int nb = (int) std::lround (apvts.getRawParameterValue (IDs::spectralBands)->load());
       if (ss.spectralBands.load() != nb) { ss.spectralBands.store (nb); changed = true; } } // re-render on band count
     mirrorB (ss.spectralAdvanced, apvts.getRawParameterValue (IDs::spectralAdv)->load() > 0.5f);
-    mirror (ss.spectralLoHz, apvts.getRawParameterValue (IDs::spectralLo)->load());
-    mirror (ss.spectralHiHz, apvts.getRawParameterValue (IDs::spectralHi)->load());
     if (changed) ss.generation.fetch_add (1);
     ss.outputGain.store (juce::Decibels::decibelsToGain (apvts.getRawParameterValue (IDs::outputGain)->load()));
     ss.renderLength.store (apvts.getRawParameterValue (IDs::renderLength)->load());
@@ -727,11 +715,8 @@ void MainView::timerCallback()
     bands_.slider.setEnabled (spec); bands_.label.setEnabled (spec);
     bands_.slider.setAlpha (spec ? 1.0f : 0.4f); bands_.label.setAlpha (spec ? 1.0f : 0.4f);
 
-    // Advanced (band-range) is a Spectral sub-option; its Low/High knobs appear in the STRUCTURE card.
-    const bool adv = apvts.getRawParameterValue (IDs::spectralAdv)->load() > 0.5f;
+    // Advanced (band-range editor) is a Spectral sub-option.
     advBtn_.setEnabled (spec); advBtn_.setAlpha (spec ? 1.0f : 0.4f);
-    const bool showAdv = spec && adv;
-    if (showAdv != advRowShown_) { advRowShown_ = showAdv; resized(); }
 
     gain_.slider.setEnabled (! normOn);
     normTarget_.setEnabled (normOn);

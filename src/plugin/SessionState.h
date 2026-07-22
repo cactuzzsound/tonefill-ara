@@ -94,6 +94,21 @@ struct SessionState
     void setWave (WaveData w) { std::lock_guard<std::mutex> l (waveMutex_); wave_ = std::move (w); }
     WaveData getWave() { std::lock_guard<std::mutex> l (waveMutex_); return wave_; }
 
+    // Spectral Advanced: explicit band-edge frequencies (Hz), set from the spectral editor window.
+    // Empty / wrong count -> the worker falls back to the geometric default spread.
+    std::atomic<int> spectralEdgesGen { 0 };
+    void setSpectralEdges (std::vector<float> e)
+    {
+        std::lock_guard<std::mutex> l (edgesMutex_);
+        spectralEdges_ = std::move (e);
+        spectralEdgesGen.fetch_add (1);
+    }
+    std::vector<float> getSpectralEdges()
+    {
+        std::lock_guard<std::mutex> l (edgesMutex_);
+        return spectralEdges_;
+    }
+
     // User-selected learn regions (manual mode), in SOURCE sample coordinates.
     std::atomic<int> manualGen { 0 }; // bumped when the selection changes -> worker re-analyzes
     void setManualRanges (std::vector<std::pair<int, int>> r)
@@ -127,5 +142,8 @@ private:
 
     std::mutex rangesMutex_;
     std::vector<std::pair<int, int>> manualRanges_;
+
+    std::mutex edgesMutex_;
+    std::vector<float> spectralEdges_;
 };
 } // namespace tonefill::plugin

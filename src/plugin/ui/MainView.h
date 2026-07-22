@@ -16,6 +16,7 @@ namespace tonefill::plugin { class PluginProcessor; }
 namespace tonefill::plugin::ui
 {
 class WaveformWindow;
+class SpectralEditorWindow;
 
 class MainView : public juce::Component, private juce::Timer
 {
@@ -41,6 +42,7 @@ private:
     float sampleToX (int sample) const;    // source sample -> waveform x
     void drawGroupIcon (juce::Graphics&, juce::Rectangle<float> box, int icon, juce::Colour) const;
     void openWaveformWindow();
+    void openSpectralWindow();
 
     PluginProcessor& processor_;
     ToneFillLookAndFeel lnf_;
@@ -48,7 +50,7 @@ private:
 
     juce::Label titleLbl_, subLbl_;
 
-    Knob threshold_, speech_, blend_, variation_, minFill_, flatness_, bands_, lo_, hi_, gain_, length_;
+    Knob threshold_, speech_, blend_, variation_, minFill_, flatness_, bands_, gain_, length_;
 
     // Value-pill rectangles for the 9 knobs, rebuilt in resized(), drawn in paint().
     std::vector<juce::Rectangle<int>> valuePills_;
@@ -84,15 +86,15 @@ private:
     using SA  = juce::AudioProcessorValueTreeState::SliderAttachment;
     using BA  = juce::AudioProcessorValueTreeState::ButtonAttachment;
     using CBA = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
-    std::unique_ptr<SA> thA_, spA_, blA_, vaA_, mfA_, flA_, sbA_, loA_, hiA_, gaA_, leA_, ntA_, hfrA_, hqA_;
+    std::unique_ptr<SA> thA_, spA_, blA_, vaA_, mfA_, flA_, sbA_, gaA_, leA_, ntA_, hfrA_, hqA_;
     std::unique_ptr<BA>  neA_, wfA_, enA_, hbA_, byA_, adA_;
     std::unique_ptr<CBA> nuA_;
 
     std::unique_ptr<WaveformWindow> waveWin_;
+    std::unique_ptr<SpectralEditorWindow> specWin_;
     std::unique_ptr<juce::FileChooser> chooser_;
     const SessionState* shownState_ = nullptr; // detect the editor re-pointing to another clip
     int  loadedEpoch_ = -1;                    // paramsEpoch last loaded; reload if a restore bumps it
-    bool advRowShown_ = false;                 // STRUCTURE card shows Low/High (Spectral+Advanced)
 
     SessionState::WaveData wave_;
     float meterDb_ = -120.0f;

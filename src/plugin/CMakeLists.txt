@@ -17,6 +17,7 @@ set(PLUGIN_SOURCES
     ParameterState.cpp
     ui/MainView.cpp
     ui/WaveformWindow.cpp
+    ui/SpectralEditorWindow.cpp
     ara/ARAIntegrationFacade.cpp)
 
 # Compiled ONLY when the ARA SDK is available. These are the real JUCE<->ARA bindings that
@@ -93,6 +94,7 @@ target_link_libraries(ToneFillPlugin
     PRIVATE
         ToneFillAssets
         tonefill_engine
+        juce::juce_dsp
         juce::juce_audio_utils
         juce::juce_audio_plugin_client
     PUBLIC

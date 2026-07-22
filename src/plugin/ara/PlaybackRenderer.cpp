@@ -417,16 +417,23 @@ public:
                     // Edges are geometric across 150..8000 Hz (default 7 bands ~ the standard split),
                     // with the sub-150 and >8000 anchor bands kept at the ends.
                     const int nBands = juce::jlimit (3, 12, ss.spectralBands.load());
+                    const int nEdges = nBands - 1;
                     std::vector<double> edges;
+                    // Advanced with explicit edges from the spectral editor: use them (sorted, clamped).
+                    // Otherwise a geometric 150..8000 Hz spread.
+                    if (ss.spectralAdvanced.load())
                     {
-                        const int nEdges = nBands - 1; // lo and hi are the first/last edges
-                        // Advanced: user-chosen band range; otherwise the default 150..8000 Hz span.
-                        double lo = 150.0, hi = 8000.0;
-                        if (ss.spectralAdvanced.load())
+                        auto ue = ss.getSpectralEdges();
+                        if ((int) ue.size() == nEdges)
                         {
-                            lo = juce::jlimit (20.0, sampleRate * 0.45, (double) ss.spectralLoHz.load());
-                            hi = juce::jlimit (lo * 1.2, sampleRate * 0.49, (double) ss.spectralHiHz.load());
+                            std::sort (ue.begin(), ue.end());
+                            for (float f : ue) edges.push_back (juce::jlimit (20.0, sampleRate * 0.49, (double) f));
                         }
+                    }
+                    if ((int) edges.size() != nEdges)
+                    {
+                        edges.clear();
+                        const double lo = 150.0, hi = 8000.0;
                         for (int e = 0; e < nEdges; ++e)
                         {
                             const double t = nEdges > 1 ? (double) e / (double) (nEdges - 1) : 0.0;
