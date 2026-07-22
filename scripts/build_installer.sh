@@ -15,7 +15,7 @@
 # commented block at the bottom - it needs your Apple ID + an app-specific password.
 set -euo pipefail
 
-VERSION="${1:-0.9}"
+VERSION="${1:-0.9.1}"
 WANT_AAX=1
 [ "${2:-}" = "--no-aax" ] && WANT_AAX=0
 
