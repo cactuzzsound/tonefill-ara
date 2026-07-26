@@ -3,6 +3,7 @@
 #include <juce_core/juce_core.h>
 
 #include <atomic>
+#include <memory>
 #include <utility>
 #include <vector>
 
@@ -30,6 +31,15 @@ struct ASShared
 
     // GUI -> processor (manual room-tone regions, in source-sample coordinates)
     std::vector<std::pair<int, int>> manualRanges;
+
+    // processor -> GUI: the analysed source (mono-collapsed) for the spectral editor's spectrogram.
+    std::shared_ptr<const std::vector<std::vector<float>>> sourcePreview;
+    double sourceSr = 48000.0;
+    int sourceGen = 0;
+
+    // GUI -> processor: explicit Spectral Advanced band edges (Hz). edgesGen bumps on every edit.
+    std::vector<float> spectralEdges;
+    int spectralEdgesGen = 0;
 
     // Set by the Parameters' ASPreviewState notification. Preview (realtime) -> the render thread
     // outputs the last-good fill and the worker recomputes in the background (no stall); when false

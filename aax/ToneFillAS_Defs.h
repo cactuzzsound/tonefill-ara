@@ -34,4 +34,5 @@ constexpr const char* kParamSeed       = "seed";     // Variation seed     1..10
 constexpr const char* kParamManual     = "manual";   // 1 = learn from manual regions on the waveform
 constexpr const char* kParamSpectral   = "spectral"; // Spectral Mosaic: per-band select + synth on/off
 constexpr const char* kParamBands      = "bands";    // Spectral: number of analysis bands  3..12
+constexpr const char* kParamSpectralAdv= "specadv";  // Spectral Advanced: use editor band edges
 } // namespace tonefill_aax

@@ -45,7 +45,8 @@ target_sources(ToneFillAS PRIVATE
     ToneFillAS_Parameters.cpp
     ToneFillAS_HostProcessor.cpp
     ToneFillAS_GUI.cpp
-    ASView.cpp)
+    ASView.cpp
+    "${CMAKE_SOURCE_DIR}/src/plugin/ui/SpectralEditor.cpp")
 
 target_include_directories(ToneFillAS PRIVATE
     "${AAX_SDK_PATH}/Interfaces" "${AAX_SDK_PATH}/Interfaces/ACF"
@@ -60,6 +61,7 @@ target_link_libraries(ToneFillAS PRIVATE
     tonefill_engine
     ToneFillAssets
     juce::juce_gui_basics
+    juce::juce_dsp
     juce::juce_recommended_config_flags
     juce::juce_recommended_warning_flags)
 target_compile_definitions(ToneFillAS PRIVATE

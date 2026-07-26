@@ -25,7 +25,9 @@ public:
     std::function<void()> onClose;
 
 private:
+    struct SessionHost;
     ToneFillLookAndFeel lnf_;
+    std::unique_ptr<SessionHost>     host_;
     std::unique_ptr<juce::Component> content_;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SpectralEditorWindow)
 };

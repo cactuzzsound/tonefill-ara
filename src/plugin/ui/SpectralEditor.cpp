@@ -1,0 +1,385 @@
+#include "plugin/ui/SpectralEditor.h"
+#include "plugin/ui/ToneFillLookAndFeel.h"
+
+#include <juce_dsp/juce_dsp.h>
+
+#include <algorithm>
+#include <cmath>
+#include <functional>
+#include <vector>
+
+namespace tonefill::plugin::ui
+{
+using LNF = ToneFillLookAndFeel;
+
+namespace
+{
+// RX / inferno-style colour map: 0 = background-dark, 1 = hot yellow-white.
+juce::Colour heat (float t)
+{
+    t = juce::jlimit (0.0f, 1.0f, t);
+    struct P { float t; juce::uint8 r, g, b; };
+    static const P stops[] = {
+        { 0.00f,  10,  12,  20 }, { 0.20f,  30,  20,  80 }, { 0.40f, 110,  30, 130 },
+        { 0.60f, 200,  50,  90 }, { 0.78f, 240, 130,  40 }, { 0.90f, 250, 200,  70 },
+        { 1.00f, 255, 245, 200 }
+    };
+    for (int i = 1; i < (int) (sizeof (stops) / sizeof (P)); ++i)
+        if (t <= stops[i].t)
+        {
+            const auto& a = stops[i - 1]; const auto& b = stops[i];
+            const float f = (t - a.t) / juce::jmax (1.0e-6f, b.t - a.t);
+            return juce::Colour ((juce::uint8) (a.r + f * (b.r - a.r)),
+                                 (juce::uint8) (a.g + f * (b.g - a.g)),
+                                 (juce::uint8) (a.b + f * (b.b - a.b)));
+        }
+    return juce::Colour (255, 245, 200);
+}
+
+juce::String freqLabel (double hz)
+{
+    if (hz >= 1000.0) return juce::String (hz / 1000.0, hz >= 10000.0 ? 0 : 1) + "k";
+    return juce::String ((int) std::lround (hz));
+}
+} // namespace
+
+//==============================================================================
+class SpectralEditorComponent::View : public juce::Component, private juce::Timer
+{
+public:
+    explicit View (SpectralEditorHost& h) : host_ (h) { startTimerHz (8); }
+
+    void fit()
+    {
+        fLo_ = 20.0; fHi_ = juce::jmax (2000.0, nyquist_); tLo_ = 0.0; tHi_ = 1.0;
+        displayDirty_ = true; repaint();
+    }
+
+    void zoomFreq (double factor)
+    {
+        const double cf = std::sqrt (fLo_ * fHi_);
+        double ratio = juce::jlimit (2.0, 3000.0, std::pow (fHi_ / fLo_, factor));
+        double lo = juce::jmax (15.0, cf / std::sqrt (ratio));
+        double hi = juce::jmin (nyquist_, cf * std::sqrt (ratio));
+        if (hi / lo > 1.3) { fLo_ = lo; fHi_ = hi; displayDirty_ = true; repaint(); }
+    }
+    void zoomTime (double factor)
+    {
+        const double c = (tLo_ + tHi_) * 0.5;
+        const double span = juce::jlimit (0.01, 1.0, (tHi_ - tLo_) * factor);
+        tLo_ = juce::jlimit (0.0, 1.0 - span, c - span * 0.5);
+        tHi_ = tLo_ + span; displayDirty_ = true; repaint();
+    }
+    void panFreq (double octaves)
+    {
+        const double f = std::pow (2.0, octaves);
+        double lo = fLo_ * f, hi = fHi_ * f;
+        if (hi > nyquist_) { const double k = nyquist_ / hi; lo *= k; hi *= k; }
+        if (lo < 15.0)      { const double k = 15.0 / lo;     lo *= k; hi *= k; }
+        fLo_ = lo; fHi_ = juce::jmin (nyquist_, hi); displayDirty_ = true; repaint();
+    }
+    void panTime (double frac)
+    {
+        const double span = tHi_ - tLo_;
+        tLo_ = juce::jlimit (0.0, 1.0 - span, tLo_ + frac * span);
+        tHi_ = tLo_ + span; displayDirty_ = true; repaint();
+    }
+    void setPanSpeed (float s) { panSpeed_ = juce::jlimit (0.1f, 5.0f, s); }
+    void setBright (float b) { bright_ = juce::jlimit (0.3f, 4.0f, b); displayDirty_ = true; repaint(); }
+
+    //== spectrogram build =====================================================
+    void rebuildSpectrogram()
+    {
+        double sr = 48000.0;
+        auto src = host_.source (sr);
+        srcGen_ = host_.sourceGen();
+        grid_.clear(); numFrames_ = 0; numBins_ = 0;
+        if (src == nullptr || src->empty() || (*src)[0].empty()) { displayDirty_ = true; return; }
+
+        const int nCh = (int) src->size();
+        const int n = (int) (*src)[0].size();
+        nyquist_ = sr * 0.5;
+
+        const int order = 12, fftSize = 1 << order;             // 4096 -> fine frequency detail
+        const int hop = juce::jmax (fftSize / 8, n / 8000 + 1); // 87.5% overlap, cap ~8000 frames
+        numBins_ = fftSize / 2 + 1;
+        binHz_   = sr / fftSize;
+        const int frames = juce::jmax (1, (n - fftSize) / hop + 1);
+
+        juce::dsp::FFT fft (order);
+        juce::dsp::WindowingFunction<float> win (fftSize, juce::dsp::WindowingFunction<float>::hann);
+        std::vector<float> buf ((std::size_t) fftSize * 2);
+        grid_.assign ((std::size_t) frames * numBins_, 0.0f);
+
+        float maxDb = -200.0f;
+        for (int f = 0; f < frames; ++f)
+        {
+            const int pos = f * hop;
+            for (int i = 0; i < fftSize; ++i)
+            {
+                float v = 0.0f; const int s = pos + i;
+                if (s < n) for (int c = 0; c < nCh; ++c) v += (*src)[(std::size_t) c][(std::size_t) s];
+                buf[(std::size_t) i] = nCh > 1 ? v / (float) nCh : v;
+            }
+            std::fill (buf.begin() + fftSize, buf.end(), 0.0f);
+            win.multiplyWithWindowingTable (buf.data(), (std::size_t) fftSize);
+            fft.performFrequencyOnlyForwardTransform (buf.data());
+            for (int b = 0; b < numBins_; ++b)
+            {
+                const float db = 20.0f * std::log10 (buf[(std::size_t) b] + 1.0e-9f);
+                grid_[(std::size_t) f * numBins_ + b] = db;
+                maxDb = juce::jmax (maxDb, db);
+            }
+        }
+        const float lo = maxDb - 80.0f, span = 80.0f;
+        for (auto& v : grid_) v = juce::jlimit (0.0f, 1.0f, (v - lo) / span);
+        numFrames_ = frames;
+        displayDirty_ = true;
+    }
+
+    //== freq <-> y (log) ======================================================
+    juce::Rectangle<int> plot() const { return getLocalBounds().withTrimmedLeft (46).withTrimmedBottom (2); }
+    float freqToY (double hz) const
+    {
+        const auto a = plot();
+        const double frac = std::log (juce::jmax (1.0, hz) / fLo_) / std::log (fHi_ / fLo_);
+        return (float) a.getBottom() - (float) juce::jlimit (0.0, 1.0, frac) * (float) a.getHeight();
+    }
+    double yToFreq (float y) const
+    {
+        const auto a = plot();
+        const double frac = juce::jlimit (0.0, 1.0, (double) (a.getBottom() - y) / juce::jmax (1, a.getHeight()));
+        return fLo_ * std::pow (fHi_ / fLo_, frac);
+    }
+
+    void rebuildDisplay()
+    {
+        displayDirty_ = false;
+        const auto a = plot();
+        if (a.getWidth() <= 0 || a.getHeight() <= 0 || numFrames_ == 0) { display_ = juce::Image(); return; }
+
+        display_ = juce::Image (juce::Image::RGB, a.getWidth(), a.getHeight(), false);
+        juce::Image::BitmapData bmp (display_, juce::Image::BitmapData::writeOnly);
+
+        std::vector<int> f0s ((std::size_t) a.getWidth()), f1s ((std::size_t) a.getWidth());
+        std::vector<float> ffr ((std::size_t) a.getWidth());
+        for (int px = 0; px < a.getWidth(); ++px)
+        {
+            const double tf = tLo_ + (double) px / juce::jmax (1, a.getWidth()) * (tHi_ - tLo_);
+            const double ff = juce::jlimit (0.0, (double) (numFrames_ - 1), tf * (numFrames_ - 1));
+            const int f0 = (int) ff;
+            f0s[(std::size_t) px] = f0;
+            f1s[(std::size_t) px] = juce::jmin (numFrames_ - 1, f0 + 1);
+            ffr[(std::size_t) px] = (float) (ff - f0);
+        }
+        for (int py = 0; py < a.getHeight(); ++py)
+        {
+            const double hz = yToFreq ((float) (a.getY() + py));
+            const double binf = juce::jlimit (0.0, (double) (numBins_ - 1), hz / binHz_);
+            const int b0 = (int) binf, b1 = juce::jmin (numBins_ - 1, b0 + 1);
+            const float bf = (float) (binf - b0);
+            for (int px = 0; px < a.getWidth(); ++px)
+            {
+                const int f0 = f0s[(std::size_t) px], f1 = f1s[(std::size_t) px];
+                const float ff = ffr[(std::size_t) px];
+                const float v00 = grid_[(std::size_t) f0 * numBins_ + b0];
+                const float v01 = grid_[(std::size_t) f0 * numBins_ + b1];
+                const float v10 = grid_[(std::size_t) f1 * numBins_ + b0];
+                const float v11 = grid_[(std::size_t) f1 * numBins_ + b1];
+                const float v = (v00 * (1.0f - bf) + v01 * bf) * (1.0f - ff)
+                              + (v10 * (1.0f - bf) + v11 * bf) * ff;
+                bmp.setPixelColour (px, py, heat (juce::jlimit (0.0f, 1.0f, v * bright_)));
+            }
+        }
+    }
+
+    //== edges =================================================================
+    int bandCount() const { return juce::jlimit (3, 12, host_.bandCount()); }
+
+    void syncEdges()
+    {
+        const int need = bandCount() - 1;
+        auto ue = host_.edges();
+        if ((int) ue.size() == need) { edges_ = ue; return; }
+        edges_.assign ((std::size_t) need, 0.0f);
+        const double lo = 150.0, hi = 8000.0;
+        for (int e = 0; e < need; ++e)
+        { const double t = need > 1 ? (double) e / (double) (need - 1) : 0.0; edges_[(std::size_t) e] = (float) (lo * std::pow (hi / lo, t)); }
+        commitEdges();
+    }
+    void commitEdges()
+    {
+        std::sort (edges_.begin(), edges_.end());
+        host_.setEdges (edges_);
+    }
+
+    //== drawing ===============================================================
+    void paint (juce::Graphics& g) override
+    {
+        g.fillAll (LNF::bg());
+        const auto a = plot();
+        if (displayDirty_) rebuildDisplay();
+        if (display_.isValid()) g.drawImageAt (display_, a.getX(), a.getY());
+        else { g.setColour (LNF::muted()); g.drawText ("Analysing... open a clip and let the analysis run", a, juce::Justification::centred, false); }
+
+        g.setFont (juce::Font (10.0f));
+        static const double marks[] = { 30, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 15000, 20000 };
+        for (double hz : marks)
+        {
+            if (hz < fLo_ || hz > fHi_) continue;
+            const float y = freqToY (hz);
+            g.setColour (LNF::line().withAlpha (0.25f));
+            g.fillRect ((float) a.getX(), y, (float) a.getWidth(), 1.0f);
+            g.setColour (LNF::muted());
+            g.drawText (freqLabel (hz), 4, (int) y - 6, 40, 12, juce::Justification::centredRight, false);
+        }
+
+        {
+            std::vector<double> bounds; bounds.push_back (fLo_);
+            for (float e : edges_) bounds.push_back (e);
+            bounds.push_back (fHi_);
+            g.setFont (juce::Font (11.0f, juce::Font::bold));
+            for (int b = 0; b + 1 < (int) bounds.size(); ++b)
+            {
+                const double c = std::sqrt (juce::jmax (1.0, bounds[(std::size_t) b]) * juce::jmax (1.0, bounds[(std::size_t) b + 1]));
+                if (c < fLo_ || c > fHi_) continue;
+                const float y = freqToY (c);
+                g.setColour (juce::Colours::white.withAlpha (0.6f));
+                g.drawText ("B" + juce::String (b + 1), a.getX() + 6, (int) y - 8, 34, 16, juce::Justification::centredLeft, false);
+            }
+        }
+
+        for (int i = 0; i < (int) edges_.size(); ++i)
+        {
+            const float y = freqToY (edges_[(std::size_t) i]);
+            const bool hot = (i == dragEdge_);
+            g.setColour (hot ? LNF::accent() : juce::Colours::white.withAlpha (0.85f));
+            g.fillRect ((float) a.getX(), y - (hot ? 1.5f : 0.5f), (float) a.getWidth(), hot ? 3.0f : 1.0f);
+            g.setColour (juce::Colours::black.withAlpha (0.55f));
+            g.fillRoundedRectangle ((float) a.getRight() - 66.0f, y - 8.0f, 60.0f, 16.0f, 4.0f);
+            g.setColour (juce::Colours::white);
+            g.drawText (freqLabel (edges_[(std::size_t) i]) + " Hz", (int) a.getRight() - 64, (int) y - 8, 56, 16, juce::Justification::centredLeft, false);
+        }
+    }
+
+    //== interaction ===========================================================
+    int edgeAt (juce::Point<int> p) const
+    {
+        for (int i = 0; i < (int) edges_.size(); ++i)
+            if (std::abs (freqToY (edges_[(std::size_t) i]) - (float) p.y) < 6.0f) return i;
+        return -1;
+    }
+    void mouseMove (const juce::MouseEvent& e) override
+    { setMouseCursor (edgeAt (e.getPosition()) >= 0 ? juce::MouseCursor::UpDownResizeCursor : juce::MouseCursor::NormalCursor); }
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        dragEdge_ = edgeAt (e.getPosition());
+        panLast_ = e.getPosition();
+        if (dragEdge_ < 0) setMouseCursor (juce::MouseCursor::DraggingHandCursor);
+        repaint();
+    }
+    void mouseDrag (const juce::MouseEvent& e) override
+    {
+        if (dragEdge_ >= 0)
+        {
+            const double hz = yToFreq ((float) e.y);
+            const double lo = dragEdge_ > 0 ? edges_[(std::size_t) dragEdge_ - 1] + 1.0 : 20.0;
+            const double hi = dragEdge_ + 1 < (int) edges_.size() ? edges_[(std::size_t) dragEdge_ + 1] - 1.0 : nyquist_ - 1.0;
+            edges_[(std::size_t) dragEdge_] = (float) juce::jlimit (lo, hi, hz);
+            repaint();
+            return;
+        }
+        const auto a = plot();
+        const int dx = e.x - panLast_.x, dy = e.y - panLast_.y;
+        panLast_ = e.getPosition();
+        panFreq (-dy * (std::log2 (fHi_ / fLo_) / (double) juce::jmax (1, a.getHeight())));
+        panTime (-dx * ((tHi_ - tLo_) / (double) juce::jmax (1, a.getWidth())));
+    }
+    void mouseUp (const juce::MouseEvent&) override
+    {
+        setMouseCursor (juce::MouseCursor::NormalCursor);
+        if (dragEdge_ >= 0) { dragEdge_ = -1; commitEdges(); repaint(); }
+    }
+    void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails& w) override
+    {
+        if (std::abs (w.deltaX) > std::abs (w.deltaY)) panTime (-w.deltaX * 0.35 * panSpeed_);
+        else                                          panFreq (w.deltaY * 0.5 * panSpeed_);
+    }
+    void resized() override { displayDirty_ = true; }
+
+private:
+    void timerCallback() override
+    {
+        if (host_.sourceGen() != srcGen_) rebuildSpectrogram();
+        if ((int) edges_.size() != bandCount() - 1) syncEdges();
+        if (numFrames_ > 0 && fHi_ <= 20.0) fit();
+    }
+
+    SpectralEditorHost& host_;
+    std::vector<float> grid_; int numFrames_ = 0, numBins_ = 0; double binHz_ = 46.875, nyquist_ = 24000.0;
+    int srcGen_ = -1;
+    juce::Image display_; bool displayDirty_ = true;
+    double fLo_ = 20.0, fHi_ = 20.0, tLo_ = 0.0, tHi_ = 1.0;
+    std::vector<float> edges_; int dragEdge_ = -1;
+    juce::Point<int> panLast_;
+    float panSpeed_ = 1.0f, bright_ = 1.0f;
+};
+
+//==============================================================================
+SpectralEditorComponent::SpectralEditorComponent (SpectralEditorHost& host)
+{
+    view_ = std::make_unique<View> (host);
+    addAndMakeVisible (*view_);
+
+    auto addBtn = [this] (juce::TextButton& b, const juce::String& t, const juce::String& tip, std::function<void()> fn)
+    { b.setButtonText (t); b.setTooltip (tip); b.onClick = std::move (fn); addAndMakeVisible (b); };
+    addBtn (hInBtn_,  "H +", "Zoom in on time",       [this] { view_->zoomTime (1.0 / 1.5); });
+    addBtn (hOutBtn_, "H -", "Zoom out on time",      [this] { view_->zoomTime (1.5); });
+    addBtn (vInBtn_,  "V +", "Zoom in on frequency",  [this] { view_->zoomFreq (1.0 / 1.5); });
+    addBtn (vOutBtn_, "V -", "Zoom out on frequency", [this] { view_->zoomFreq (1.5); });
+    addBtn (fitBtn_,  "Fit", "Reset zoom to the full spectrum.", [this] { view_->fit(); });
+
+    auto setupKnob = [this] (juce::Slider& s, juce::Label& l, const juce::String& name, const juce::String& tip, std::function<void()> fn)
+    {
+        s.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
+        s.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+        s.setRange (0.2, 4.0, 0.05); s.setSkewFactorFromMidPoint (1.0);
+        s.setValue (1.0, juce::dontSendNotification);
+        s.setTooltip (tip); s.onValueChange = std::move (fn); addAndMakeVisible (s);
+        l.setText (name, juce::dontSendNotification); l.setFont (juce::Font (10.0f));
+        l.setColour (juce::Label::textColourId, LNF::muted());
+        l.setJustificationType (juce::Justification::centred); addAndMakeVisible (l);
+    };
+    setupKnob (speed_,  speedLbl_,  "Speed",  "Wheel pan speed (timeline + frequency).",        [this] { view_->setPanSpeed ((float) speed_.getValue()); });
+    setupKnob (bright_, brightLbl_, "Bright", "Spectrogram brightness - lift quiet detail.",    [this] { view_->setBright ((float) bright_.getValue()); });
+
+    hint_.setText ("Drag lines = set band edges. Drag canvas = pan. Wheel = up/down, side-wheel = left/right. "
+                   "H/V buttons zoom. Band count follows the Bands knob.",
+                   juce::dontSendNotification);
+    hint_.setFont (juce::Font (11.5f));
+    hint_.setColour (juce::Label::textColourId, LNF::muted());
+    addAndMakeVisible (hint_);
+    setSize (960, 520);
+}
+
+SpectralEditorComponent::~SpectralEditorComponent() = default;
+
+void SpectralEditorComponent::resized()
+{
+    auto r = getLocalBounds();
+    auto tb = r.removeFromTop (30).reduced (6, 4);
+    for (auto* b : { &hInBtn_, &hOutBtn_, &vInBtn_, &vOutBtn_, &fitBtn_ })
+    { b->setBounds (tb.removeFromLeft (46)); tb.removeFromLeft (4); }
+    tb.removeFromLeft (8);
+    speedLbl_.setBounds (tb.removeFromLeft (34));
+    speed_.setBounds (tb.removeFromLeft (26).withSizeKeepingCentre (24, 24));
+    tb.removeFromLeft (8);
+    brightLbl_.setBounds (tb.removeFromLeft (34));
+    bright_.setBounds (tb.removeFromLeft (26).withSizeKeepingCentre (24, 24));
+    tb.removeFromLeft (10);
+    hint_.setBounds (tb);
+    view_->setBounds (r.reduced (6, 4));
+}
+
+void SpectralEditorComponent::paint (juce::Graphics& g) { g.fillAll (LNF::bg()); }
+} // namespace tonefill::plugin::ui

@@ -76,8 +76,9 @@ struct RenderParams
 {
     double sr = 48000.0;
     bool  manual = false, experimental = false, enhance = false, normOn = false, normLufs = true;
-    bool  spectral = false;
+    bool  spectral = false, spectralAdvanced = false;
     int   bands = 7;
+    std::vector<float> spectralEdges; // advanced: explicit band edges (Hz) from the editor
     float clean = 0, voice = 0, flatness = 0, minFill = 2, chunk = 0, xfade = 0, smooth = 0;
     double seed = 1, normTarget = -16.0;
     std::vector<std::pair<int, int>> manualRanges;
@@ -237,11 +238,22 @@ renderSpectralImpl (const tonefill::engine::model::AmbienceModelPtr& model,
 
     // Band edges: geometric across 150..8000 Hz from the band count.
     const int nBands = juce::jlimit (3, 12, p.bands);
+    const int nEdges = nBands - 1;
     std::vector<double> edges;
-    { const int nEdges = nBands - 1; const double lo = 150.0, hi = 8000.0;
-      for (int e = 0; e < nEdges; ++e)
-      { const double t = nEdges > 1 ? (double) e / (double) (nEdges - 1) : 0.0;
-        edges.push_back (lo * std::pow (hi / lo, t)); } }
+    // Advanced with explicit editor edges: use them (sorted, clamped); else a geometric 150..8000 spread.
+    if (p.spectralAdvanced && (int) p.spectralEdges.size() == nEdges)
+    {
+        auto ue = p.spectralEdges; std::sort (ue.begin(), ue.end());
+        for (float f : ue) edges.push_back (juce::jlimit (20.0, p.sr * 0.49, (double) f));
+    }
+    if ((int) edges.size() != nEdges)
+    {
+        edges.clear();
+        const double lo = 150.0, hi = 8000.0;
+        for (int e = 0; e < nEdges; ++e)
+        { const double t = nEdges > 1 ? (double) e / (double) (nEdges - 1) : 0.0;
+          edges.push_back (lo * std::pow (hi / lo, t)); }
+    }
 
     // Mono-collapse the source and split it.
     std::vector<float> mono ((std::size_t) srcN, 0.0f);
@@ -519,17 +531,36 @@ AAX_Result ToneFillAS_HostProcessor::RenderAudio (const float* const inAudioIns[
     pr.normTarget = readReal (kParamNormTarget, -60.0, 0.0);
     pr.spectral = readNorm (kParamSpectral) > 0.5;
     pr.bands    = (int) std::lround (readReal (kParamBands, 3.0, 12.0));
-    if (sh != nullptr) { const juce::SpinLock::ScopedLockType l (sh->lock); pr.manualRanges = sh->manualRanges; }
+    pr.spectralAdvanced = readNorm (kParamSpectralAdv) > 0.5;
+
+    // Publish the analysed source to the GUI's spectrogram once per new source (build outside the lock).
+    std::shared_ptr<std::vector<std::vector<float>>> newPreview;
+    if (mRaw != nullptr && mRawSig != mPreviewSig)
+    {
+        newPreview = std::make_shared<std::vector<std::vector<float>>> ((std::size_t) mRaw->getNumChannels());
+        for (int c = 0; c < mRaw->getNumChannels(); ++c)
+            (*newPreview)[(std::size_t) c].assign (mRaw->getReadPointer (c), mRaw->getReadPointer (c) + mRaw->getNumSamples());
+        mPreviewSig = mRawSig;
+    }
+    if (sh != nullptr)
+    {
+        const juce::SpinLock::ScopedLockType l (sh->lock);
+        pr.manualRanges  = sh->manualRanges;
+        pr.spectralEdges = sh->spectralEdges;
+        if (newPreview != nullptr) { sh->sourcePreview = newPreview; sh->sourceSr = mSampleRate; sh->sourceGen++; }
+    }
 
     long long manHash = pr.manual ? 1 : 0;
     for (const auto& r : pr.manualRanges) manHash = manHash * 1000003LL + r.first * 31 + r.second;
-    char asig[256], rsig[160];
+    long long edgeHash = pr.spectralAdvanced ? 1 : 0;
+    for (float f : pr.spectralEdges) edgeHash = edgeHash * 1000003LL + (long long) std::lround (f);
+    char asig[256], rsig[192];
     std::snprintf (asig, sizeof (asig), "%s|%.4f %.4f %.4f %.4f %d|%lld", mRawSig.c_str(),
                    pr.clean, pr.voice, pr.flatness, pr.minFill, pr.experimental ? 1 : 0, manHash);
-    std::snprintf (rsig, sizeof (rsig), "%d %.4f %.4f %.4f %.0f|%d %.4f %d|%d %d",
+    std::snprintf (rsig, sizeof (rsig), "%d %.4f %.4f %.4f %.0f|%d %.4f %d|%d %d|%d %lld",
                    pr.enhance ? 1 : 0, pr.chunk, pr.xfade, pr.smooth, pr.seed,
                    pr.normOn ? 1 : 0, pr.normTarget, pr.normLufs ? 1 : 0,
-                   pr.spectral ? 1 : 0, pr.bands);
+                   pr.spectral ? 1 : 0, pr.bands, pr.spectralAdvanced ? 1 : 0, edgeHash);
     pr.aSig = asig; pr.rSig = rsig;
 
     // Submit to the worker when anything relevant changed.

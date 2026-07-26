@@ -42,7 +42,7 @@ private:
 
     // Whole analysed source (mono-collapsed), read on the render thread, handed to the worker.
     std::shared_ptr<const juce::AudioBuffer<float>> mRaw;
-    std::string mRawSig, mLastSubmitSig;
+    std::string mRawSig, mLastSubmitSig, mPreviewSig;
 
     // Hiss filter applied LIVE on the tiled output (stateful across the pass), like ARA.
     std::vector<juce::IIRFilter> mHiss;

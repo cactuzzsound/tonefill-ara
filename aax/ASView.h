@@ -12,6 +12,7 @@
 namespace tonefill_aax
 {
 struct ASShared;
+class ASSpectralWindow;
 
 // Dedicated AudioSuite view. Mirrors the plugin's MainView as closely as AudioSuite allows: the
 // only things dropped are the three Pro Tools provides natively (Full = WHOLE FILE, Audition =
@@ -60,6 +61,9 @@ private:
     std::vector<std::unique_ptr<Knob>>   knobs_;
     std::vector<std::unique_ptr<Toggle>> toggles_;
     juce::TextButton classicBtn_ { "Classic" }, expBtn_ { "Experimental" }, spectralBtn_ { "Spectral" };
+    juce::TextButton advBtn_ { "Advanced" };
+    std::unique_ptr<ASSpectralWindow> specWin_;
+    void openSpectralWindow();
     juce::TextButton autoBtn_ { "Auto" }, manualBtn_ { "Manual" };
     juce::TextButton regenBtn_ { "Regenerate" };
 

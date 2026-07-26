@@ -17,6 +17,7 @@ set(PLUGIN_SOURCES
     ParameterState.cpp
     ui/MainView.cpp
     ui/WaveformWindow.cpp
+    ui/SpectralEditor.cpp
     ui/SpectralEditorWindow.cpp
     ara/ARAIntegrationFacade.cpp)
 

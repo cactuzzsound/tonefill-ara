@@ -1,6 +1,7 @@
 #include "ASView.h"
 #include "ToneFillAS_Defs.h"
 #include "ASShared.h"
+#include "ASSpectralWindow.h"
 
 #include "BinaryData.h"
 
@@ -98,6 +99,12 @@ ASView::ASView (Bridge bridge) : bridge_ (std::move (bridge))
     expBtn_.onClick      = [this] { bridge_.setNorm (kParamExperim, 1.0); bridge_.setNorm (kParamSpectral, 0.0); };
     spectralBtn_.onClick = [this] { bridge_.setNorm (kParamExperim, 0.0); bridge_.setNorm (kParamSpectral, 1.0); };
 
+    advBtn_.setClickingTogglesState (true);
+    advBtn_.setTooltip ("Spectral Advanced: open a spectrum editor to place each band's frequency edges by hand.");
+    advBtn_.onClick = [this] { bridge_.setNorm (kParamSpectralAdv, advBtn_.getToggleState() ? 1.0 : 0.0);
+                               if (advBtn_.getToggleState()) openSpectralWindow(); };
+    addAndMakeVisible (advBtn_);
+
     // Auto / Manual segmented pair (Manual = learn only from the regions dragged on the waveform).
     for (auto* b : { &autoBtn_, &manualBtn_ }) { b->setClickingTogglesState (false); addAndMakeVisible (*b); }
     autoBtn_.setTooltip ("Auto: find clean room tone automatically in the selection.");
@@ -133,6 +140,17 @@ ASView::ASView (Bridge bridge) : bridge_ (std::move (bridge))
 
 ASView::~ASView() { stopTimer(); setLookAndFeel (nullptr); }
 
+void ASView::openSpectralWindow()
+{
+    if (bridge_.shared == nullptr) return;
+    if (specWin_ == nullptr)
+    {
+        specWin_ = std::make_unique<ASSpectralWindow> (*bridge_.shared, bridge_.getNorm);
+        specWin_->onClose = [this] { specWin_.reset(); };
+    }
+    else specWin_->toFront (true);
+}
+
 void ASView::timerCallback()
 {
     for (auto& k : knobs_)
@@ -149,6 +167,9 @@ void ASView::timerCallback()
     for (auto& k : knobs_)
         if (k->id == kParamBands)
         { k->slider.setEnabled (spec); k->slider.setAlpha (spec ? 1.0f : 0.4f); k->label.setAlpha (spec ? 1.0f : 0.4f); }
+    advBtn_.setEnabled (spec);
+    advBtn_.setAlpha (spec ? 1.0f : 0.4f);
+    advBtn_.setToggleState (bridge_.getNorm (kParamSpectralAdv) > 0.5, juce::dontSendNotification);
 
     manualMode_ = bridge_.getNorm (kParamManual) > 0.5;
     autoBtn_.setToggleState (! manualMode_, juce::dontSendNotification);
@@ -338,6 +359,8 @@ void ASView::resized()
           classicBtn_.setBounds (box.removeFromLeft (w)); box.removeFromLeft (4);
           expBtn_.setBounds (box.removeFromLeft (w));     box.removeFromLeft (4);
           spectralBtn_.setBounds (box); }
+        head.removeFromRight (6);
+        advBtn_.setBounds (head.removeFromRight (78).withSizeKeepingCentre (78, 26));
         head.removeFromRight (8);
         (*std::find_if (toggles_.begin(), toggles_.end(), [] (auto& t) { return t->id == kParamEnhance; }))
             ->btn.setBounds (head.removeFromRight (80).withSizeKeepingCentre (80, 26));
