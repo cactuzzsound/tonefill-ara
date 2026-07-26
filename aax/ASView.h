@@ -65,7 +65,7 @@ private:
     std::unique_ptr<ASSpectralWindow> specWin_;
     void openSpectralWindow();
     juce::TextButton autoBtn_ { "Auto" }, manualBtn_ { "Manual" };
-    juce::TextButton regenBtn_ { "Regenerate" };
+    juce::TextButton regenBtn_ { "Regenerate" }, bypassBtn_ { "Bypass" };
 
     // Waveform + manual selection (source-sample coords, mirrored to shared->manualRanges).
     int  waveSamples_ = 0;

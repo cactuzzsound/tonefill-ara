@@ -35,4 +35,5 @@ constexpr const char* kParamManual     = "manual";   // 1 = learn from manual re
 constexpr const char* kParamSpectral   = "spectral"; // Spectral Mosaic: per-band select + synth on/off
 constexpr const char* kParamBands      = "bands";    // Spectral: number of analysis bands  3..12
 constexpr const char* kParamSpectralAdv= "specadv";  // Spectral Advanced: use editor band edges
+constexpr const char* kParamBypass     = "bypass";   // A/B: pass the source through instead of the fill
 } // namespace tonefill_aax

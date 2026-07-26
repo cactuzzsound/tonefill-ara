@@ -92,6 +92,7 @@ AAX_Result ToneFillAS_Parameters::EffectInit()
     addBool  (kParamSpectral,    "Spectral",     false, "off", "on");
     addFloat (kParamBands,       "Bands",        7.0f, 3.0f, 12.0f);
     addBool  (kParamSpectralAdv, "Spectral Adv", false, "off", "on");
+    addBool  (kParamBypass,      "Bypass",       false, "off", "on");
 
     return AAX_SUCCESS;
 }

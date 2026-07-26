@@ -571,6 +571,15 @@ AAX_Result ToneFillAS_HostProcessor::RenderAudio (const float* const inAudioIns[
         mLastSubmitSig = submit;
     }
 
+    // Bypass A/B: pass the source straight through so you can compare it against the room tone.
+    if (readNorm (kParamBypass) > 0.5)
+    {
+        for (int c = 0; c < ci; ++c)
+            if (inAudioOuts[c] && inAudioIns[c] && inAudioIns[c] != inAudioOuts[c])
+                std::memcpy (inAudioOuts[c], inAudioIns[c], sizeof (float) * (std::size_t) n);
+        return AAX_SUCCESS;
+    }
+
     auto fr = (mWorker != nullptr) ? mWorker->getFill() : nullptr;
 
     // Offline Render: block until the worker has produced THIS render's fill (write the right file).

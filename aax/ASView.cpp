@@ -117,6 +117,12 @@ ASView::ASView (Bridge bridge) : bridge_ (std::move (bridge))
     regenBtn_.onClick = [this] { bridge_.setNorm (kParamSeed, rng_.nextDouble()); };
     addAndMakeVisible (regenBtn_);
 
+    bypassBtn_.setButtonText ("Bypass");
+    bypassBtn_.setClickingTogglesState (true);
+    bypassBtn_.setTooltip ("A/B: Preview/Render the original source instead of the room tone, to compare them.");
+    bypassBtn_.onClick = [this] { bridge_.setNorm (kParamBypass, bypassBtn_.getToggleState() ? 1.0 : 0.0); };
+    addAndMakeVisible (bypassBtn_);
+
     tips_ = {
         "Push Voice Reject up to strip breaths and mouth noise from the bed.",
         "Keep Clean Level low - it rejects claps and loud bits harder.",
@@ -133,7 +139,7 @@ ASView::ASView (Bridge bridge) : bridge_ (std::move (bridge))
     tipLbl_.setJustificationType (juce::Justification::centredLeft);
     addAndMakeVisible (tipLbl_);
 
-    setSize (720, 548);
+    setSize (860, 548);
     startTimerHz (12);
     timerCallback();
 }
@@ -170,6 +176,7 @@ void ASView::timerCallback()
     advBtn_.setEnabled (spec);
     advBtn_.setAlpha (spec ? 1.0f : 0.4f);
     advBtn_.setToggleState (bridge_.getNorm (kParamSpectralAdv) > 0.5, juce::dontSendNotification);
+    bypassBtn_.setToggleState (bridge_.getNorm (kParamBypass) > 0.5, juce::dontSendNotification);
 
     manualMode_ = bridge_.getNorm (kParamManual) > 0.5;
     autoBtn_.setToggleState (! manualMode_, juce::dontSendNotification);
@@ -418,6 +425,8 @@ void ASView::resized()
     // Footer: Tip + Regenerate.
     auto foot = r.removeFromTop (44);
     regenBtn_.setBounds (foot.removeFromRight (130).withSizeKeepingCentre (130, 36));
+    foot.removeFromRight (8);
+    bypassBtn_.setBounds (foot.removeFromRight (110).withSizeKeepingCentre (110, 36));
     foot.removeFromRight (12);
     tipCard_ = foot;
     tipLbl_.setBounds (tipCard_.reduced (14, 0).withTrimmedLeft (34));
