@@ -571,12 +571,22 @@ AAX_Result ToneFillAS_HostProcessor::RenderAudio (const float* const inAudioIns[
         mLastSubmitSig = submit;
     }
 
-    // Bypass A/B: pass the source straight through so you can compare it against the room tone.
+    // Bypass A/B: play the analysed source (looped) instead of the room tone, so you can compare
+    // them. Uses mRaw rather than the input buffer, which AudioSuite does not reliably feed here.
     if (readNorm (kParamBypass) > 0.5)
     {
+        const long long slen = (mRaw != nullptr) ? mRaw->getNumSamples() : 0;
         for (int c = 0; c < ci; ++c)
-            if (inAudioOuts[c] && inAudioIns[c] && inAudioIns[c] != inAudioOuts[c])
-                std::memcpy (inAudioOuts[c], inAudioIns[c], sizeof (float) * (std::size_t) n);
+        {
+            if (! inAudioOuts[c]) continue;
+            if (slen > 0)
+            {
+                const float* s = mRaw->getReadPointer (juce::jmin (c, mRaw->getNumChannels() - 1));
+                for (int i = 0; i < n; ++i) inAudioOuts[c][i] = s[(std::size_t) ((mGenPos + i) % slen)];
+            }
+            else std::memset (inAudioOuts[c], 0, sizeof (float) * (std::size_t) n);
+        }
+        if (slen > 0) mGenPos += n;
         return AAX_SUCCESS;
     }
 

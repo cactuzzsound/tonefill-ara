@@ -2,6 +2,7 @@
 #include "ToneFillAS_Defs.h"
 #include "ASShared.h"
 #include "ASSpectralWindow.h"
+#include "ASWaveformWindow.h"
 
 #include "BinaryData.h"
 
@@ -123,6 +124,11 @@ ASView::ASView (Bridge bridge) : bridge_ (std::move (bridge))
     bypassBtn_.onClick = [this] { bridge_.setNorm (kParamBypass, bypassBtn_.getToggleState() ? 1.0 : 0.0); };
     addAndMakeVisible (bypassBtn_);
 
+    expandBtn_.setButtonText ("Expand");
+    expandBtn_.setTooltip ("Open a large waveform view for precise manual room-tone selection.");
+    expandBtn_.onClick = [this] { openWaveformWindow(); };
+    addAndMakeVisible (expandBtn_);
+
     tips_ = {
         "Push Voice Reject up to strip breaths and mouth noise from the bed.",
         "Keep Clean Level low - it rejects claps and loud bits harder.",
@@ -155,6 +161,17 @@ void ASView::openSpectralWindow()
         specWin_->onClose = [this] { specWin_.reset(); };
     }
     else specWin_->toFront (true);
+}
+
+void ASView::openWaveformWindow()
+{
+    if (bridge_.shared == nullptr) return;
+    if (waveWin_ == nullptr)
+    {
+        waveWin_ = std::make_unique<ASWaveformWindow> (*bridge_.shared);
+        waveWin_->onClose = [this] { waveWin_.reset(); };
+    }
+    else waveWin_->toFront (true);
 }
 
 void ASView::timerCallback()
@@ -426,7 +443,9 @@ void ASView::resized()
     auto foot = r.removeFromTop (44);
     regenBtn_.setBounds (foot.removeFromRight (130).withSizeKeepingCentre (130, 36));
     foot.removeFromRight (8);
-    bypassBtn_.setBounds (foot.removeFromRight (110).withSizeKeepingCentre (110, 36));
+    bypassBtn_.setBounds (foot.removeFromRight (104).withSizeKeepingCentre (104, 36));
+    foot.removeFromRight (8);
+    expandBtn_.setBounds (foot.removeFromRight (94).withSizeKeepingCentre (94, 36));
     foot.removeFromRight (12);
     tipCard_ = foot;
     tipLbl_.setBounds (tipCard_.reduced (14, 0).withTrimmedLeft (34));

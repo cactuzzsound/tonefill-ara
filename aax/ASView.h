@@ -13,6 +13,7 @@ namespace tonefill_aax
 {
 struct ASShared;
 class ASSpectralWindow;
+class ASWaveformWindow;
 
 // Dedicated AudioSuite view. Mirrors the plugin's MainView as closely as AudioSuite allows: the
 // only things dropped are the three Pro Tools provides natively (Full = WHOLE FILE, Audition =
@@ -63,9 +64,11 @@ private:
     juce::TextButton classicBtn_ { "Classic" }, expBtn_ { "Experimental" }, spectralBtn_ { "Spectral" };
     juce::TextButton advBtn_ { "Advanced" };
     std::unique_ptr<ASSpectralWindow> specWin_;
+    std::unique_ptr<ASWaveformWindow> waveWin_;
     void openSpectralWindow();
+    void openWaveformWindow();
     juce::TextButton autoBtn_ { "Auto" }, manualBtn_ { "Manual" };
-    juce::TextButton regenBtn_ { "Regenerate" }, bypassBtn_ { "Bypass" };
+    juce::TextButton regenBtn_ { "Regenerate" }, bypassBtn_ { "Bypass" }, expandBtn_ { "Expand" };
 
     // Waveform + manual selection (source-sample coords, mirrored to shared->manualRanges).
     int  waveSamples_ = 0;
