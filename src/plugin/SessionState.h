@@ -49,6 +49,7 @@ struct SessionState
     std::atomic<std::uint64_t> seed { 1 };
     std::atomic<int>           generation { 0 };
     std::atomic<int>           paramsEpoch { 0 }; // bumped when an ARA archive restore writes params
+    std::atomic<bool>          computing { false }; // worker is (re)analysing/(re)rendering -> UI hint
 
     // worker / audio thread -> UI (status, meter)
     std::atomic<int>   phase { 0 };          // 0 idle, 1 analyzing, 2 ready

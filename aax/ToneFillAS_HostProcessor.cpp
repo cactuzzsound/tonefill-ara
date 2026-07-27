@@ -400,6 +400,8 @@ public:
                     mDoneRSig = job.rSig;
                 }
             }
+            // Done with this job (no newer one queued): the GUI can drop the "recomputing" hint.
+            { const juce::ScopedLock l (mJobLock); if (! mHasJob && mShared != nullptr) mShared->computing.store (false); }
         }
     }
 
@@ -567,6 +569,7 @@ AAX_Result ToneFillAS_HostProcessor::RenderAudio (const float* const inAudioIns[
     const std::string submit = pr.aSig + "#" + pr.rSig;
     if (mWorker != nullptr && mRaw != nullptr && submit != mLastSubmitSig)
     {
+        if (sh != nullptr) sh->computing.store (true);
         mWorker->submit (pr, mRaw);
         mLastSubmitSig = submit;
     }

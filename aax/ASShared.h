@@ -45,5 +45,9 @@ struct ASShared
     // outputs the last-good fill and the worker recomputes in the background (no stall); when false
     // (offline Render) the render thread blocks for the correct fill so the written file is right.
     std::atomic<bool> previewing { false };
+
+    // true while the worker is (re)analysing / (re)rendering after a parameter change, so the GUI can
+    // show a "recomputing" hint (AudioSuite only recomputes during Preview/Render).
+    std::atomic<bool> computing { false };
 };
 } // namespace tonefill_aax

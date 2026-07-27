@@ -293,6 +293,7 @@ void ASView::paint (juce::Graphics& g)
     g.fillRoundedRectangle (waveArea_.toFloat(), 6.0f);
 
     std::vector<float> peak; std::vector<char> clean; float usedSec = 0, availSec = 0, seamDb = 0, levelDb = -120.0f; int chunks = 0; bool ready = false; double sr = 48000.0;
+    const bool computing = (bridge_.shared != nullptr) && bridge_.shared->computing.load();
     if (bridge_.shared != nullptr)
     {
         const juce::SpinLock::ScopedTryLockType l (bridge_.shared->lock);
@@ -366,6 +367,15 @@ void ASView::paint (juce::Graphics& g)
               + juce::String (availSec, 1) + " s" + seamStr + "   \xc2\xb7   in " + juce::String (levelDb, 0) + " dB"
         : (manualMode_ ? "Manual: drag on the waveform to add room-tone regions." : "");
     g.drawText (txt, dataArea_, juce::Justification::centredLeft, false);
+
+    // "recomputing" hint: AudioSuite only re-analyses during Preview/Render, so show when the worker
+    // is catching up after a change (right-aligned in the status row).
+    if (computing)
+    {
+        g.setColour (LNF::accent());
+        g.setFont (juce::Font (12.0f, juce::Font::bold));
+        g.drawText ("recomputing\xe2\x80\xa6", dataArea_, juce::Justification::centredRight, false);
+    }
 }
 
 void ASView::resized()

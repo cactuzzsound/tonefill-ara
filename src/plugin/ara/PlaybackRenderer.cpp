@@ -365,6 +365,7 @@ public:
                 || std::abs (minf - lastMinFill) > 1.0e-4f || manual != lastManual || mGen != lastManualGen
                 || stat != lastStat)
             {
+                ss.computing.store (true);
                 const auto ranges = manual ? ss.getManualRanges() : std::vector<std::pair<int, int>>{};
                 const bool useManual = manual && ! ranges.empty();
                 const juce::AudioBuffer<float> learnInput = useManual ? buildManual (ranges) : learnSrc;
@@ -378,6 +379,7 @@ public:
 
             if (needRender && model != nullptr)
             {
+                ss.computing.store (true);
                 engine::model::RenderSettings s;
                 s.mode = engine::model::Mode::Ambience; // only exposed mode
                 s.paulStretch = ss.paulStretch.load();  // Enhance
@@ -571,6 +573,7 @@ public:
             lastNorm       = ss.normalizeEnabled.load();
             lastNormTarget = ss.normalizeTarget.load();
             lastNormUnit   = ss.normalizeLufs.load();
+            ss.computing.store (false);
             wait (100);
         }
     }
