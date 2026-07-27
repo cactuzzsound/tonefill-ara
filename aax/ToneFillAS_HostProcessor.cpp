@@ -384,6 +384,9 @@ public:
             { const juce::ScopedLock l (mJobLock); if (! mHasJob) continue; job = mPending; raw = mPendingRaw; mHasJob = false; }
             if (raw == nullptr) continue;
 
+            if ((job.aSig != mDoneASig || mModel == nullptr || job.rSig != mDoneRSig) && mShared != nullptr)
+                mShared->computing.store (true);
+
             if (job.aSig != mDoneASig || mModel == nullptr)
             {
                 mModel = analyseImpl (job, *raw, mShared);

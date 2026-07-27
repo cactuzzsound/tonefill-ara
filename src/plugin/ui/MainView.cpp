@@ -460,11 +460,13 @@ void MainView::paint (juce::Graphics& g)
 
     const double sr = processor_.sessionState().sourceSampleRate.load();
     const double totalSec = (srcN > 0 && sr > 0) ? srcN / sr : 0.0;
-    g.setColour (LNF::good());
+    const bool computing = processor_.sessionState().computing.load();
+    g.setColour (computing ? LNF::accent() : LNF::good());
     g.fillEllipse ((float) dataArea_.getX(), (float) dataArea_.getBottom() + 6.0f, 8.0f, 8.0f);
-    g.setColour (LNF::muted());
+    g.setColour (computing ? LNF::accent() : LNF::muted());
     g.setFont (juce::Font (11.0f));
-    g.drawText ("READY   ·   " + juce::String (sr / 1000.0, 1) + " kHz   ·   24-bit   ·   " + formatClock (totalSec),
+    const juce::String head = computing ? "RECOMPUTING…" : "READY";
+    g.drawText (head + "   ·   " + juce::String (sr / 1000.0, 1) + " kHz   ·   24-bit   ·   " + formatClock (totalSec),
                 dataArea_.getX() + 14, dataArea_.getBottom() + 3, dataArea_.getWidth(), 14, juce::Justification::centredLeft, false);
 }
 
