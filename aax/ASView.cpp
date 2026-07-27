@@ -374,7 +374,7 @@ void ASView::paint (juce::Graphics& g)
     {
         g.setColour (LNF::accent());
         g.setFont (juce::Font (12.0f, juce::Font::bold));
-        g.drawText ("recomputing\xe2\x80\xa6", dataArea_, juce::Justification::centredRight, false);
+        g.drawText ("recomputing...", dataArea_, juce::Justification::centredRight, false);
     }
 }
 
