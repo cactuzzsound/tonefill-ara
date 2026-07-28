@@ -67,24 +67,27 @@
 
   <p class="lede">ToneFill generates seamless dialogue room tone. It listens to a production clip,
   finds the cleanest, steadiest background ambience, and rebuilds it into a continuous bed you can
-  stretch under any edit — no loop points, no audible joins. VST3 (with ARA) and Audio Unit for
-  Logic Pro X.</p>
+  stretch under any edit — no loop points, no audible joins. VST3 and Audio Unit (both with ARA) for
+  Nuendo, Cubase, Reaper, Studio One and Logic Pro, and a native AAX AudioSuite build for Pro Tools.</p>
 
   <h2><span class="dot" style="background:var(--navy)"></span>Quick start</h2>
   <div class="card">
     <ol class="steps">
-      <li>Drop ToneFill on a dialogue clip (ARA) or region. Analysis runs automatically off the audio thread.</li>
+      <li>Add ToneFill to a dialogue clip. In ARA hosts (Nuendo, Cubase, Reaper, Logic) it is an
+        <b>Extension</b> on the clip, not a track insert; in Pro Tools it is an <b>AudioSuite</b> plug-in.
+        Analysis runs off the audio thread.</li>
       <li>Leave <span class="chip ghost">Auto</span> on — the waveform lights the clean ambience it found in <b style="color:var(--orange)">orange</b>.</li>
-      <li>Play back: the gaps and the whole region are filled with matched room tone.</li>
+      <li>Play back (ARA) or press <b>Preview</b> (AudioSuite): the gaps and the whole region are filled with matched room tone.</li>
       <li>Not clean enough? Raise <span class="chip">Voice Reject</span> and lower <span class="chip">Clean Level</span>.</li>
-      <li>Set <span class="chip">Export Len</span> and hit <span class="chip coral">Export WAV</span> for a standalone file.</li>
+      <li>Set <span class="chip">Export Len</span> and hit <span class="chip coral">Export WAV</span> (ARA), or
+        <b>Render</b> the clip (AudioSuite), for a standalone bed.</li>
     </ol>
   </div>
 
   <h2><span class="dot" style="background:var(--orange)"></span>Detection — what counts as room tone</h2>
   <div class="grid">
     <div class="ctl"><div class="name"><b>Clean Level</b><span class="pill o">Auto</span></div>
-      <p>How quiet a moment must be to count as room tone. Lower = stricter — rejects claps, clicks and loud bits more aggressively.</p></div>
+      <p>How quiet a moment must be to count as room tone. Lower = stricter — rejects claps, clicks and loud bits more aggressively. Very high values can pick digital silence between words, giving a silent bed — keep it moderate.</p></div>
     <div class="ctl"><div class="name"><b>Voice Reject</b><span class="pill o">Auto</span></div>
       <p>How hard to exclude voice, breaths and mouth noise. Higher = cleaner tone. Push it up and keep Clean Level low for dialogue-heavy takes.</p></div>
     <div class="ctl"><div class="name"><b>Min Fill</b><span class="pill o">Auto</span></div>
@@ -95,8 +98,8 @@
   <div class="grid">
     <div class="ctl"><div class="name"><b>Flatness</b><span class="pill p">Selection</span></div>
       <p>How strict the stationarity requirement is. Higher = only very steady stretches, so the fill avoids audible jumps and level swings.</p></div>
-    <div class="ctl"><div class="name"><b>Chunk Size</b><span class="pill p">Bed</span></div>
-      <p>Length of each real chunk taken from the source. Longer = more natural texture; shorter = smoother but more repetitive.</p></div>
+    <div class="ctl"><div class="name"><b>Bands</b><span class="pill p">Spectral</span></div>
+      <p>Spectral mode only: how many frequency bands the source is split into. Fewer = wider bands; more = narrower, finer bands. Grey unless Spectral is active.</p></div>
     <div class="ctl"><div class="name"><b>Crossfade</b><span class="pill p">Bed</span></div>
       <p>How much neighbouring chunks overlap and blend. Higher = smoother joins. Joins are also widened automatically when two chunks differ in the low end.</p></div>
   </div>
@@ -117,10 +120,27 @@
       <tr><td><span class="chip ghost">Auto</span> / <span class="chip">Manual</span></td>
         <td><b>Auto</b> finds clean room tone for you. <b>Manual</b> lets you drag your own regions on the waveform below — drag to add, click a region to remove.</td></tr>
       <tr><td><span class="chip">Enhance</span> / <span class="chip ghost">Full</span></td>
-        <td><b>Enhance</b> turns on PaulStretch resynthesis for when the real fragments won't blend into a clean bed (enables Smoothness and the Hiss Filter). <b>Full</b> analyses the whole take instead of the first 4 minutes — use it when clean tone is scattered across a long clip.</td></tr>
-      <tr><td><span class="chip ghost">Classic</span> / <span class="chip">Experimental</span></td>
-        <td><b>Classic</b> is the tuned selection engine (default). <b>Experimental</b> scores every frame with a weighted model — A/B it against Classic by ear; if it doesn't win, switch back.</td></tr>
+        <td><b>Enhance</b> turns on PaulStretch resynthesis for when the real fragments won't blend into a clean bed (enables Smoothness and the Hiss Filter). <b>Full</b> analyses the whole take instead of the first 10 minutes — use it when clean tone is scattered across a long clip.</td></tr>
+      <tr><td><span class="chip ghost">Classic</span> / <span class="chip">Experimental</span> / <span class="chip">Spectral</span></td>
+        <td><b>Classic</b> is the tuned selection engine (default). <b>Experimental</b> scores every frame with a weighted model. <b>Spectral</b> is the per-band mosaic — see below. Pick one; A/B by ear.</td></tr>
+      <tr><td><span class="chip">Bypass</span></td>
+        <td>A/B monitor: play the original source instead of the room tone, so you can compare them. Does not change what Export/Render writes.</td></tr>
     </table>
+  </div>
+
+  <h2><span class="dot" style="background:var(--purple)"></span>Spectral mode &amp; the band editor</h2>
+  <div class="card">
+    <p><b>Spectral</b> stops looking for one moment that is clean across the whole spectrum. Instead it
+    splits the source into frequency bands, finds clean room tone in <i>each band on its own</i>, and
+    recombines them. Because room tone is far steadier within a narrow band, the result has a rock-solid
+    low end and more usable material — the low band gets its own dedicated selection rather than needing
+    every frequency clean at the same instant. The <span class="chip">Bands</span> knob sets how many bands.</p>
+    <p style="margin-top:10px"><span class="chip">Advanced</span> opens the <b>Spectral Band Editor</b>: a
+    spectrogram of the source (log-frequency, colour-mapped) with a draggable line for every band edge.
+    Drag a line to place that band's frequency boundary by hand on the actual spectrum. Zoom with the
+    H / V buttons, pan with the wheel (up/down) and side-wheel (left/right) or by dragging the canvas,
+    and use <b>Speed</b> and <b>Bright</b> to tune the navigation and readability. Your edges are saved
+    with the clip.</p>
   </div>
 
   <h2><span class="dot" style="background:var(--coral)"></span>Hiss Filter <span style="color:var(--muted);letter-spacing:0;text-transform:none;font-weight:400;font-size:12px">(Enhance only)</span></h2>
@@ -141,7 +161,7 @@
     <p>Turn <span class="chip">Normalize</span> on to bake the output to a fixed loudness target. Pick
     <b>LUFS</b> (integrated, EBU R128) or <b>dBFS</b> (peak), set the target with the − / + stepper, and the
     <b>now</b> readout shows the measured value. While Normalize is on, the Output knob is bypassed and
-    the exported WAV is corrected to hit the target precisely at your chosen length.</p>
+    the exported bed is corrected to hit the target precisely at your chosen length (true peak capped at −1 dBFS).</p>
   </div>
 
   <h2><span class="dot" style="background:var(--navy)"></span>Waveform &amp; readouts</h2>
@@ -156,15 +176,17 @@
       <tr><td>used</td><td>total clean material actually used after the Min Fill filter, and how many chunks.</td></tr>
       <tr><td>avail</td><td>total clean material found before Min Fill — if this is high but <i>used</i> is low, lower Min Fill.</td></tr>
       <tr><td>seam</td><td>average spectral mismatch across chunk joins (dB). A ⚠ over 4 dB means raise Min Fill or tighten the selection.</td></tr>
-      <tr><td>in</td><td>the analysed source level.</td></tr>
+      <tr><td>in</td><td>the analysed source level. If it reads ≈ −120 dB the selection is picking silence — lower Clean Level.</td></tr>
     </table>
+    <div class="note" style="margin-top:14px"><b>Pro Tools.</b> AudioSuite recomputes only during <b>Preview / Render</b>, so the waveform and readouts refresh while a <i>recomputing…</i> hint is showing — keep Preview running while you tweak in Auto.</div>
   </div>
 
   <h2><span class="dot" style="background:var(--navy)"></span>Actions</h2>
   <div class="card">
     <p><span class="chip ghost">Regenerate</span> rolls a new random variation of the fill with the same
     settings — handy if a particular realisation repeats audibly. <span class="chip coral">Export WAV</span>
-    writes the fill to a 24-bit WAV, tiled seamlessly to <b>Export Len</b> (loudness-corrected when Normalize is on).</p>
+    writes the fill to a 24-bit WAV, tiled seamlessly to <b>Export Len</b> (loudness-corrected when Normalize is
+    on). In Pro Tools, <b>Render</b> commits the AudioSuite result to the clip instead.</p>
   </div>
 
   <h2><span class="dot" style="background:var(--orange)"></span>Working the low end</h2>
@@ -172,22 +194,32 @@
     <p>Room tone lives or dies below 500 Hz — that's where the ear hears a "different room". ToneFill
     treats the low band as a first-class part of the room's colour: chunks with a mismatched low end
     are rejected during selection, and joins between chunks that differ in the low end are crossfaded
-    harder. If a fill still feels like it shifts weight at a cut, raise <b>Min Fill</b> and <b>Flatness</b>.</p>
+    harder. If a fill still feels like it shifts weight at a cut, raise <b>Min Fill</b> and <b>Flatness</b>,
+    or switch to <b>Spectral</b> so the low band gets its own dedicated selection.</p>
+  </div>
+
+  <h2><span class="dot" style="background:var(--good)"></span>Per-clip settings</h2>
+  <div class="card">
+    <p>In ARA hosts, every clip keeps its <i>own</i> ToneFill settings — knobs, mode, Spectral bands and the
+    hand-drawn band edges are stored per clip and saved in the project, so switching between clips or
+    reopening a session restores exactly what each one had. Attaching ToneFill to a new clip starts it
+    from the defaults, not from the previous clip.</p>
   </div>
 
   <h2><span class="dot" style="background:var(--navy)"></span>Formats &amp; install</h2>
   <div class="card">
     <table class="kv">
-      <tr><td>VST3 (with ARA)</td><td><code>~/Library/Audio/Plug-Ins/VST3/ToneFill.vst3</code> — Reaper, Cubase, Studio One, Pro Tools (ARA).</td></tr>
-      <tr><td>Audio Unit</td><td><code>~/Library/Audio/Plug-Ins/Components/ToneFill.component</code> — Logic Pro X, GarageBand.</td></tr>
-      <tr><td>Installer</td><td>Signed <code>.pkg</code> installs both, system-wide, into <code>/Library/Audio/Plug-Ins</code>.</td></tr>
+      <tr><td>VST3 (with ARA)</td><td><code>/Library/Audio/Plug-Ins/VST3/ToneFill.vst3</code> — Nuendo, Cubase, Reaper, Studio One. Add as an ARA Extension on the clip.</td></tr>
+      <tr><td>Audio Unit (with ARA)</td><td><code>/Library/Audio/Plug-Ins/Components/ToneFill.component</code> — Logic Pro.</td></tr>
+      <tr><td>AAX (AudioSuite)</td><td><code>/Library/Application Support/Avid/Audio/Plug-Ins/ToneFill.aaxplugin</code> — Pro Tools, under AudioSuite.</td></tr>
+      <tr><td>Installer</td><td>Signed macOS <code>.pkg</code> with a Customize pane to pick AAX / VST3 / AU; a signed <code>.exe</code> for Windows (VST3).</td></tr>
       <tr><td>Manufacturer</td><td>cactuzz sound</td></tr>
     </table>
   </div>
 
   <footer>
     <span>ToneFill — Seamless Room Tone · © cactuzz sound</span>
-    <span>v1.0.0</span>
+    <span>v0.9.3</span>
   </footer>
 
 </div>
