@@ -26,11 +26,17 @@ if(NOT TARGET AAX_SDK::AAX_Export)
 endif()
 
 if(NOT TARGET AAX_SDK::AAXLibrary)
-    add_library(AAXLibrary STATIC IMPORTED GLOBAL)
-    set_target_properties(AAXLibrary PROPERTIES
-        IMPORTED_LOCATION "${AAX_SDK_PATH}/Libs/Release/libAAXLibrary_libcpp.a"
-        INTERFACE_INCLUDE_DIRECTORIES "${AAX_SDK_PATH}/Interfaces;${AAX_SDK_PATH}/Interfaces/ACF")
-    add_library(AAX_SDK::AAXLibrary ALIAS AAXLibrary)
+    if(WIN32)
+        # The SDK ships only a macOS prebuilt AAXLibrary (libcpp .a); on Windows build it from the
+        # SDK's own CMake sources, which define the AAX_SDK::AAXLibrary target we link below.
+        add_subdirectory("${AAX_SDK_PATH}/Libs/AAXLibrary" "${CMAKE_BINARY_DIR}/AAXLibrary")
+    else()
+        add_library(AAXLibrary STATIC IMPORTED GLOBAL)
+        set_target_properties(AAXLibrary PROPERTIES
+            IMPORTED_LOCATION "${AAX_SDK_PATH}/Libs/Release/libAAXLibrary_libcpp.a"
+            INTERFACE_INCLUDE_DIRECTORIES "${AAX_SDK_PATH}/Interfaces;${AAX_SDK_PATH}/Interfaces/ACF")
+        add_library(AAX_SDK::AAXLibrary ALIAS AAXLibrary)
+    endif()
 endif()
 
 # --- The plug-in bundle ------------------------------------------------------------------------
