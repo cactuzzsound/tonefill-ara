@@ -20,6 +20,9 @@ struct SpectralEditorHost
     virtual int  bandCount() = 0;   // 3..12
     virtual std::vector<float> edges() = 0;         // current band edges (Hz)
     virtual void setEdges (std::vector<float>) = 0; // commit edges + trigger a re-render
+    virtual int  edgesGen() = 0;    // bumps whenever the edges change externally (Auto Analyze / restore)
+    virtual void setBandCount (int) = 0;   // set the Bands knob/param (edges stay authoritative)
+    virtual void requestAutoBands() = 0;   // ask the worker to auto-compute band edges from the analysis
 };
 
 // The full editor: a spectrogram view (STFT, log-frequency, colour-mapped) with draggable band-edge
@@ -36,7 +39,7 @@ public:
 private:
     class View; // spectrogram + edges (defined in the .cpp)
     std::unique_ptr<View> view_;
-    juce::TextButton hInBtn_, hOutBtn_, vInBtn_, vOutBtn_, fitBtn_;
+    juce::TextButton hInBtn_, hOutBtn_, vInBtn_, vOutBtn_, fitBtn_, autoBtn_;
     juce::Slider speed_, bright_;
     juce::Label speedLbl_, brightLbl_, hint_;
 

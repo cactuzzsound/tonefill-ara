@@ -41,6 +41,10 @@ struct ASShared
     std::vector<float> spectralEdges;
     int spectralEdgesGen = 0;
 
+    // GUI -> processor: bumped by the spectral editor's "Auto Analyze"; the worker then computes band
+    // edges from the clean room-tone analysis and writes them back into spectralEdges.
+    int autoBandsRequest = 0;
+
     // Set by the Parameters' ASPreviewState notification. Preview (realtime) -> the render thread
     // outputs the last-good fill and the worker recomputes in the background (no stall); when false
     // (offline Render) the render thread blocks for the correct fill so the written file is right.

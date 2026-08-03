@@ -21,13 +21,14 @@ namespace tonefill_aax
 class ASSpectralWindow : public juce::DocumentWindow
 {
 public:
-    ASSpectralWindow (ASShared& sh, std::function<double (const char*)> getNorm)
+    ASSpectralWindow (ASShared& sh, std::function<double (const char*)> getNorm,
+                      std::function<void (const char*, double)> setNorm)
         : juce::DocumentWindow ("ToneFill - Spectral Band Editor",
                                 tonefill::plugin::ui::ToneFillLookAndFeel::bg(),
                                 juce::DocumentWindow::allButtons)
     {
         setLookAndFeel (&lnf_);
-        host_    = std::make_unique<Host> (sh, std::move (getNorm));
+        host_    = std::make_unique<Host> (sh, std::move (getNorm), std::move (setNorm));
         content_ = std::make_unique<tonefill::plugin::ui::SpectralEditorComponent> (*host_);
         setContentNonOwned (content_.get(), true);
         setResizable (true, true);
@@ -44,7 +45,8 @@ public:
 private:
     struct Host : tonefill::plugin::ui::SpectralEditorHost
     {
-        Host (ASShared& s, std::function<double (const char*)> g) : sh (s), getNorm (std::move (g)) {}
+        Host (ASShared& s, std::function<double (const char*)> g, std::function<void (const char*, double)> st)
+            : sh (s), getNorm (std::move (g)), setNorm (std::move (st)) {}
 
         std::shared_ptr<const Buffer> source (double& sr) override
         { const juce::SpinLock::ScopedLockType l (sh.lock); sr = sh.sourceSr; return sh.sourcePreview; }
@@ -54,9 +56,15 @@ private:
         { const juce::SpinLock::ScopedLockType l (sh.lock); return sh.spectralEdges; }
         void setEdges (std::vector<float> e) override
         { const juce::SpinLock::ScopedLockType l (sh.lock); sh.spectralEdges = std::move (e); sh.spectralEdgesGen++; }
+        int edgesGen() override { const juce::SpinLock::ScopedLockType l (sh.lock); return sh.spectralEdgesGen; }
+        void setBandCount (int n) override
+        { if (setNorm) setNorm (kParamBands, (double) (juce::jlimit (3, 12, n) - 3) / 9.0); }
+        void requestAutoBands() override
+        { const juce::SpinLock::ScopedLockType l (sh.lock); sh.autoBandsRequest++; }
 
         ASShared& sh;
         std::function<double (const char*)> getNorm;
+        std::function<void (const char*, double)> setNorm;
     };
 
     tonefill::plugin::ui::ToneFillLookAndFeel lnf_;

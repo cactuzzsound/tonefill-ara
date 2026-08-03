@@ -196,11 +196,33 @@ public:
     //== edges =================================================================
     int bandCount() const { return juce::jlimit (3, 12, host_.bandCount()); }
 
-    void syncEdges()
+    void requestAuto() { host_.requestAutoBands(); autoPending_ = true; repaint(); }
+
+    // Keep the on-screen edges in step with the host. Explicit edges (dragged, restored, or produced by
+    // Auto Analyze) are authoritative: when they change we adopt them and pull the Bands knob to match.
+    // With no explicit edges we keep a geometric default sized to the Bands knob.
+    void syncBands()
+    {
+        const int eg = host_.edgesGen();
+        if (eg != edgesGen_)
+        {
+            edgesGen_ = eg;
+            auto ue = host_.edges();
+            if (! ue.empty())
+            {
+                std::sort (ue.begin(), ue.end());
+                edges_ = ue;
+                if ((int) edges_.size() + 1 != bandCount()) host_.setBandCount ((int) edges_.size() + 1);
+                autoPending_ = false;
+                repaint();
+                return;
+            }
+        }
+        if ((int) edges_.size() != bandCount() - 1) generateGeometric();
+    }
+    void generateGeometric()
     {
         const int need = bandCount() - 1;
-        auto ue = host_.edges();
-        if ((int) ue.size() == need) { edges_ = ue; return; }
         edges_.assign ((std::size_t) need, 0.0f);
         const double lo = 150.0, hi = 8000.0;
         for (int e = 0; e < need; ++e)
@@ -211,7 +233,9 @@ public:
     {
         std::sort (edges_.begin(), edges_.end());
         host_.setEdges (edges_);
+        edgesGen_ = host_.edgesGen(); // we authored this change; don't re-adopt it next tick
     }
+    bool autoPending() const { return autoPending_; }
 
     //== drawing ===============================================================
     void paint (juce::Graphics& g) override
@@ -259,6 +283,15 @@ public:
             g.fillRoundedRectangle ((float) a.getRight() - 66.0f, y - 8.0f, 60.0f, 16.0f, 4.0f);
             g.setColour (juce::Colours::white);
             g.drawText (freqLabel (edges_[(std::size_t) i]) + " Hz", (int) a.getRight() - 64, (int) y - 8, 56, 16, juce::Justification::centredLeft, false);
+        }
+
+        if (autoPending_)
+        {
+            g.setColour (juce::Colours::black.withAlpha (0.6f));
+            g.fillRoundedRectangle ((float) a.getCentreX() - 110.0f, (float) a.getY() + 8.0f, 220.0f, 24.0f, 5.0f);
+            g.setColour (LNF::accent());
+            g.setFont (juce::Font (12.0f, juce::Font::bold));
+            g.drawText ("Auto Analyze - finding bands...", a.getCentreX() - 108, a.getY() + 8, 216, 24, juce::Justification::centred, false);
         }
     }
 
@@ -311,13 +344,13 @@ private:
     void timerCallback() override
     {
         if (host_.sourceGen() != srcGen_) rebuildSpectrogram();
-        if ((int) edges_.size() != bandCount() - 1) syncEdges();
+        syncBands();
         if (numFrames_ > 0 && fHi_ <= 20.0) fit();
     }
 
     SpectralEditorHost& host_;
     std::vector<float> grid_; int numFrames_ = 0, numBins_ = 0; double binHz_ = 46.875, nyquist_ = 24000.0;
-    int srcGen_ = -1;
+    int srcGen_ = -1, edgesGen_ = -1; bool autoPending_ = false;
     juce::Image display_; bool displayDirty_ = true;
     double fLo_ = 20.0, fHi_ = 20.0, tLo_ = 0.0, tHi_ = 1.0;
     std::vector<float> edges_; int dragEdge_ = -1;
@@ -338,6 +371,10 @@ SpectralEditorComponent::SpectralEditorComponent (SpectralEditorHost& host)
     addBtn (vInBtn_,  "V +", "Zoom in on frequency",  [this] { view_->zoomFreq (1.0 / 1.5); });
     addBtn (vOutBtn_, "V -", "Zoom out on frequency", [this] { view_->zoomFreq (1.5); });
     addBtn (fitBtn_,  "Fit", "Reset zoom to the full spectrum.", [this] { view_->fit(); });
+    addBtn (autoBtn_, "Auto", "Auto Analyze: let ToneFill choose the band count and edges from the clean room-tone "
+                              "analysis of this clip. You can still drag the edges afterwards.",
+            [this] { view_->requestAuto(); });
+    autoBtn_.setColour (juce::TextButton::buttonColourId, LNF::accent().withAlpha (0.35f));
 
     auto setupKnob = [this] (juce::Slider& s, juce::Label& l, const juce::String& name, const juce::String& tip, std::function<void()> fn)
     {
@@ -353,8 +390,8 @@ SpectralEditorComponent::SpectralEditorComponent (SpectralEditorHost& host)
     setupKnob (speed_,  speedLbl_,  "Speed",  "Wheel pan speed (timeline + frequency).",        [this] { view_->setPanSpeed ((float) speed_.getValue()); });
     setupKnob (bright_, brightLbl_, "Bright", "Spectrogram brightness - lift quiet detail.",    [this] { view_->setBright ((float) bright_.getValue()); });
 
-    hint_.setText ("Drag lines = set band edges. Drag canvas = pan. Wheel = up/down, side-wheel = left/right. "
-                   "H/V buttons zoom. Band count follows the Bands knob.",
+    hint_.setText ("Auto = let ToneFill pick bands + edges. Drag lines = set band edges. Drag canvas = pan. "
+                   "Wheel = up/down, side-wheel = left/right. H/V zoom.",
                    juce::dontSendNotification);
     hint_.setFont (juce::Font (11.5f));
     hint_.setColour (juce::Label::textColourId, LNF::muted());
@@ -370,7 +407,8 @@ void SpectralEditorComponent::resized()
     auto tb = r.removeFromTop (30).reduced (6, 4);
     for (auto* b : { &hInBtn_, &hOutBtn_, &vInBtn_, &vOutBtn_, &fitBtn_ })
     { b->setBounds (tb.removeFromLeft (46)); tb.removeFromLeft (4); }
-    tb.removeFromLeft (8);
+    tb.removeFromLeft (6);
+    autoBtn_.setBounds (tb.removeFromLeft (56)); tb.removeFromLeft (8);
     speedLbl_.setBounds (tb.removeFromLeft (34));
     speed_.setBounds (tb.removeFromLeft (26).withSizeKeepingCentre (24, 24));
     tb.removeFromLeft (8);

@@ -95,6 +95,9 @@ struct SessionState
     void setWave (WaveData w) { std::lock_guard<std::mutex> l (waveMutex_); wave_ = std::move (w); }
     WaveData getWave() { std::lock_guard<std::mutex> l (waveMutex_); return wave_; }
 
+    // Bumped by the editor's "Auto Analyze": the worker computes band edges from the clean analysis.
+    std::atomic<int> autoBandsRequest { 0 };
+
     // Spectral Advanced: explicit band-edge frequencies (Hz), set from the spectral editor window.
     // Empty / wrong count -> the worker falls back to the geometric default spread.
     std::atomic<int> spectralEdgesGen { 0 };

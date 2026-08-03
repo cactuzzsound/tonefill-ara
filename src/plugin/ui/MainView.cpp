@@ -207,7 +207,18 @@ void MainView::openWaveformWindow()
 
 void MainView::openSpectralWindow()
 {
-    if (specWin_ == nullptr) { specWin_ = std::make_unique<SpectralEditorWindow> (processor_.sessionState()); specWin_->onClose = [this] { specWin_.reset(); }; }
+    if (specWin_ == nullptr)
+    {
+        // Auto Analyze / edge edits can change the band count; push it back onto the Bands parameter
+        // (host-notifying) so the knob, automation and saved state stay in sync.
+        auto setBands = [this] (int n)
+        {
+            if (auto* p = processor_.parameters().apvts.getParameter (IDs::spectralBands))
+                p->setValueNotifyingHost (p->convertTo0to1 ((float) n));
+        };
+        specWin_ = std::make_unique<SpectralEditorWindow> (processor_.sessionState(), std::move (setBands));
+        specWin_->onClose = [this] { specWin_.reset(); };
+    }
     else specWin_->toFront (true);
 }
 
@@ -465,7 +476,7 @@ void MainView::paint (juce::Graphics& g)
     g.fillEllipse ((float) dataArea_.getX(), (float) dataArea_.getBottom() + 6.0f, 8.0f, 8.0f);
     g.setColour (computing ? LNF::accent() : LNF::muted());
     g.setFont (juce::Font (11.0f));
-    const juce::String head = computing ? "RECOMPUTING…" : "READY";
+    const juce::String head = computing ? "RECOMPUTING..." : "READY";
     g.drawText (head + "   ·   " + juce::String (sr / 1000.0, 1) + " kHz   ·   24-bit   ·   " + formatClock (totalSec),
                 dataArea_.getX() + 14, dataArea_.getBottom() + 3, dataArea_.getWidth(), 14, juce::Justification::centredLeft, false);
 }

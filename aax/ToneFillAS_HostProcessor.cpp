@@ -13,6 +13,7 @@
 #include "core/DiagnosticsLogger.h"
 #include "dsp/Loudness.h"
 #include "dsp/SpectralBands.h"
+#include "dsp/AutoBands.h"
 
 #include <juce_audio_basics/juce_audio_basics.h>
 
@@ -78,6 +79,7 @@ struct RenderParams
     bool  manual = false, experimental = false, enhance = false, normOn = false, normLufs = true;
     bool  spectral = false, spectralAdvanced = false;
     int   bands = 7;
+    int   autoReq = 0;                // bumped by the editor's Auto Analyze -> worker computes edges
     std::vector<float> spectralEdges; // advanced: explicit band edges (Hz) from the editor
     float clean = 0, voice = 0, flatness = 0, minFill = 2, chunk = 0, xfade = 0, smooth = 0;
     double seed = 1, normTarget = -16.0;
@@ -236,19 +238,21 @@ renderSpectralImpl (const tonefill::engine::model::AmbienceModelPtr& model,
     const int effCh   = juce::jmax (1, model->numChannels);
     if (srcN <= 0 || outN <= 0) return nullptr;
 
-    // Band edges: geometric across 150..8000 Hz from the band count.
-    const int nBands = juce::jlimit (3, 12, p.bands);
-    const int nEdges = nBands - 1;
+    // Band edges. Advanced with explicit editor edges (hand-placed OR Auto Analyze): the edges are
+    // authoritative and define the band count; otherwise a geometric 150..8000 Hz spread from the knob.
+    int nBands = juce::jlimit (3, 12, p.bands);
     std::vector<double> edges;
-    // Advanced with explicit editor edges: use them (sorted, clamped); else a geometric 150..8000 spread.
-    if (p.spectralAdvanced && (int) p.spectralEdges.size() == nEdges)
+    if (p.spectralAdvanced && ! p.spectralEdges.empty())
     {
         auto ue = p.spectralEdges; std::sort (ue.begin(), ue.end());
         for (float f : ue) edges.push_back (juce::jlimit (20.0, p.sr * 0.49, (double) f));
+        nBands = juce::jlimit (3, 12, (int) edges.size() + 1);
+        if ((int) edges.size() > nBands - 1) edges.resize ((std::size_t) (nBands - 1));
     }
-    if ((int) edges.size() != nEdges)
+    if ((int) edges.size() != nBands - 1)
     {
         edges.clear();
+        const int nEdges = nBands - 1;
         const double lo = 150.0, hi = 8000.0;
         for (int e = 0; e < nEdges; ++e)
         { const double t = nEdges > 1 ? (double) e / (double) (nEdges - 1) : 0.0;
@@ -393,6 +397,28 @@ public:
                 mDoneASig = job.aSig;
                 mDoneRSig.clear();
             }
+            // Auto Analyze: compute band edges from the clean room-tone analysis and publish them to the
+            // GUI (spectralEdges). They are authoritative in renderSpectralImpl; the next render tick
+            // rebuilds the signature with them and re-renders.
+            if (job.autoReq != mDoneAutoReq)
+            {
+                mDoneAutoReq = job.autoReq;
+                if (mModel != nullptr && mShared != nullptr)
+                {
+                    const auto& cap = mModel->cleanAudioPerChannel;
+                    if (! cap.empty() && ! cap[0].empty())
+                    {
+                        const int cn = (int) cap[0].size();
+                        std::vector<float> cm ((std::size_t) cn, 0.0f);
+                        for (const auto& cc : cap)
+                            for (int i = 0; i < juce::jmin (cn, (int) cc.size()); ++i) cm[(std::size_t) i] += cc[(std::size_t) i];
+                        if (cap.size() > 1) for (auto& v : cm) v /= (float) cap.size();
+                        auto e = tonefill::dsp::autoBandEdges (cm.data(), cn, job.sr, 12);
+                        if (! e.empty())
+                        { const juce::SpinLock::ScopedLockType l (mShared->lock); mShared->spectralEdges = std::move (e); mShared->spectralEdgesGen++; }
+                    }
+                }
+            }
             if (mModel != nullptr && job.rSig != mDoneRSig)
             {
                 auto fr = job.spectral ? renderSpectralImpl (mModel, *raw, job) : renderImpl (mModel, job);
@@ -422,6 +448,7 @@ private:
 
     tonefill::engine::model::AmbienceModelPtr mModel; // worker-local cache
     std::string mDoneASig, mDoneRSig;
+    int mDoneAutoReq = 0;
 };
 
 //==============================================================================
@@ -552,6 +579,7 @@ AAX_Result ToneFillAS_HostProcessor::RenderAudio (const float* const inAudioIns[
         const juce::SpinLock::ScopedLockType l (sh->lock);
         pr.manualRanges  = sh->manualRanges;
         pr.spectralEdges = sh->spectralEdges;
+        pr.autoReq       = sh->autoBandsRequest;
         if (newPreview != nullptr) { sh->sourcePreview = newPreview; sh->sourceSr = mSampleRate; sh->sourceGen++; }
     }
 
@@ -562,10 +590,10 @@ AAX_Result ToneFillAS_HostProcessor::RenderAudio (const float* const inAudioIns[
     char asig[256], rsig[192];
     std::snprintf (asig, sizeof (asig), "%s|%.4f %.4f %.4f %.4f %d|%lld", mRawSig.c_str(),
                    pr.clean, pr.voice, pr.flatness, pr.minFill, pr.experimental ? 1 : 0, manHash);
-    std::snprintf (rsig, sizeof (rsig), "%d %.4f %.4f %.4f %.0f|%d %.4f %d|%d %d|%d %lld",
+    std::snprintf (rsig, sizeof (rsig), "%d %.4f %.4f %.4f %.0f|%d %.4f %d|%d %d|%d %lld|%d",
                    pr.enhance ? 1 : 0, pr.chunk, pr.xfade, pr.smooth, pr.seed,
                    pr.normOn ? 1 : 0, pr.normTarget, pr.normLufs ? 1 : 0,
-                   pr.spectral ? 1 : 0, pr.bands, pr.spectralAdvanced ? 1 : 0, edgeHash);
+                   pr.spectral ? 1 : 0, pr.bands, pr.spectralAdvanced ? 1 : 0, edgeHash, pr.autoReq);
     pr.aSig = asig; pr.rSig = rsig;
 
     // Submit to the worker when anything relevant changed.

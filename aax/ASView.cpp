@@ -157,7 +157,7 @@ void ASView::openSpectralWindow()
     if (bridge_.shared == nullptr) return;
     if (specWin_ == nullptr)
     {
-        specWin_ = std::make_unique<ASSpectralWindow> (*bridge_.shared, bridge_.getNorm);
+        specWin_ = std::make_unique<ASSpectralWindow> (*bridge_.shared, bridge_.getNorm, bridge_.setNorm);
         specWin_->onClose = [this] { specWin_.reset(); };
     }
     else specWin_->toFront (true);

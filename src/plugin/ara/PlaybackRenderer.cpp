@@ -10,6 +10,7 @@
 #include "engine/synthesis/AmbienceRenderer.h"
 #include "engine/model/RenderSettings.h"
 #include "dsp/SpectralBands.h"
+#include "dsp/AutoBands.h"
 #include "plugin/SessionState.h"
 #include "plugin/ara/DocumentControllerImpl.h"
 
@@ -289,7 +290,7 @@ public:
         engine::model::AmbienceModelPtr model;
         juce::AudioBuffer<float> learnKept; // the audio the model was built from (for the spectral path)
         float lastThreshold = -1.0f, lastSpeech = -1.0f, lastFlat = -1.0f, lastMinFill = -1.0f;
-        int lastGen = -1, lastManualGen = -1;
+        int lastGen = -1, lastManualGen = -1, lastAutoReq = 0;
         bool lastManual = false, lastStat = false;
 
         // Last rendered seamless loop BEFORE any output/normalize gain, plus its measured levels.
@@ -377,6 +378,29 @@ public:
             }
             if (gen != lastGen) { lastGen = gen; needRender = true; }
 
+            // Auto Analyze (spectral editor): compute band edges from the CLEAN room-tone analysis and
+            // publish them. The edges are authoritative in the spectral render, so re-render right away;
+            // the editor mirrors the derived band count onto the Bands knob for display.
+            const int autoReq = ss.autoBandsRequest.load();
+            if (autoReq != lastAutoReq)
+            {
+                lastAutoReq = autoReq;
+                if (model != nullptr)
+                {
+                    const auto& cap = model->cleanAudioPerChannel;
+                    if (! cap.empty() && ! cap[0].empty())
+                    {
+                        const int cn = (int) cap[0].size();
+                        std::vector<float> cm ((std::size_t) cn, 0.0f);
+                        for (const auto& cc : cap)
+                            for (int i = 0; i < juce::jmin (cn, (int) cc.size()); ++i) cm[(std::size_t) i] += cc[(std::size_t) i];
+                        if (cap.size() > 1) for (auto& v : cm) v /= (float) cap.size();
+                        auto autoEdges = tonefill::dsp::autoBandEdges (cm.data(), cn, sampleRate, 12);
+                        if (! autoEdges.empty()) { ss.setSpectralEdges (autoEdges); needRender = true; }
+                    }
+                }
+            }
+
             if (needRender && model != nullptr)
             {
                 ss.computing.store (true);
@@ -418,23 +442,26 @@ public:
                     // Band count is user-set (the "Bands" knob): fewer = wider bands, more = narrower.
                     // Edges are geometric across 150..8000 Hz (default 7 bands ~ the standard split),
                     // with the sub-150 and >8000 anchor bands kept at the ends.
-                    const int nBands = juce::jlimit (3, 12, ss.spectralBands.load());
-                    const int nEdges = nBands - 1;
+                    int nBands = juce::jlimit (3, 12, ss.spectralBands.load());
                     std::vector<double> edges;
-                    // Advanced with explicit edges from the spectral editor: use them (sorted, clamped).
-                    // Otherwise a geometric 150..8000 Hz spread.
+                    // Advanced with explicit edges from the spectral editor (hand-placed OR Auto Analyze):
+                    // the edges are authoritative and define the band count. Otherwise a geometric
+                    // 150..8000 Hz spread sized to the Bands knob.
                     if (ss.spectralAdvanced.load())
                     {
                         auto ue = ss.getSpectralEdges();
-                        if ((int) ue.size() == nEdges)
+                        if (! ue.empty())
                         {
                             std::sort (ue.begin(), ue.end());
                             for (float f : ue) edges.push_back (juce::jlimit (20.0, sampleRate * 0.49, (double) f));
+                            nBands = juce::jlimit (3, 12, (int) edges.size() + 1);
+                            if ((int) edges.size() > nBands - 1) edges.resize ((std::size_t) (nBands - 1));
                         }
                     }
-                    if ((int) edges.size() != nEdges)
+                    if ((int) edges.size() != nBands - 1)
                     {
                         edges.clear();
+                        const int nEdges = nBands - 1;
                         const double lo = 150.0, hi = 8000.0;
                         for (int e = 0; e < nEdges; ++e)
                         {
@@ -791,7 +818,17 @@ bool ToneFillEditorRenderer::processBlock (juce::AudioBuffer<float>& buffer,
                     if (auto* src = mod->getAudioSource())
                         { state_ = dc->stateForSource (src); break; }
 
-    buffer.clear(); // replace the source: silence until the fill exists, never pass the source through
+    // Single-instance hosts (e.g. Reaper) put the playback renderer AND this editor renderer on the
+    // SAME plug-in instance, and JUCE runs the playback renderer FIRST -- it has already written the
+    // fill into `buffer` (and set the meter). This editor renderer only owns the regions the host
+    // assigns to the editor role; when it has none (Reaper keeps the region on the playback role) we
+    // must leave `buffer` untouched. A blanket clear here would wipe the playback renderer's output,
+    // giving a silent track even though the meter showed level. Split-role hosts (Nuendo/Cubase) put
+    // the editor renderer on its own instance WITH the region, so the clear+refill below still runs.
+    if (getPlaybackRegions().empty())
+        return true;
+
+    buffer.clear(); // we own these regions: replace the source (silence until the fill exists)
     if (state_ == nullptr || ! positionInfo.getIsPlaying())
         return true;
 

@@ -18,7 +18,8 @@ namespace tonefill::plugin::ui
 class SpectralEditorWindow : public juce::DocumentWindow
 {
 public:
-    explicit SpectralEditorWindow (SessionState& state);
+    // setBandCount pushes the auto/edge-derived band count back onto the plugin's Bands parameter.
+    explicit SpectralEditorWindow (SessionState& state, std::function<void (int)> setBandCount = {});
     ~SpectralEditorWindow() override;
 
     void closeButtonPressed() override;
