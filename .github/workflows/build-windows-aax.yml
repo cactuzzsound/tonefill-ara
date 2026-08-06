@@ -22,6 +22,16 @@ on:
         description: "Configure with ARA on (matches the VST3 build). Off keeps the AAX-only build lean."
         type: boolean
         default: false
+  # Auto-run while porting the native AAX to MSVC: any change to the AAX sources, the engine, the
+  # top-level CMake, or this workflow on the working branch kicks off a build. (workflow_dispatch is
+  # not API-dispatchable until the file lands on the default branch, so push is the driver for now.)
+  push:
+    branches: [feat/spectral-mode]
+    paths:
+      - '.github/workflows/build-windows-aax.yml'
+      - 'aax/**'
+      - 'src/**'
+      - 'CMakeLists.txt'
 
 permissions:
   contents: write   # gh release download/upload against the sdk-assets release
