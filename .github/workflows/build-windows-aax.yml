@@ -1,0 +1,228 @@
+name: Build ToneFill AAX - Windows
+
+# Builds the NATIVE AAX (aax/, CMake target ToneFillAS) on Windows and PACE-signs it entirely in CI
+# via iLok Cloud (no physical iLok, no VM, no paid certificate). Mirrors the proven LostComzz flow:
+#   - self-signed code-signing cert generated on the runner (satisfies wraptool's Authenticode step),
+#   - iLok Cloud session (iloktool cloud --open) so LicenseD can authorize cloud signing,
+#   - wraptool sign --allowsigningservice with ToneFill's product wcguid.
+# Pro Tools loads it because the PACE wrap is what it validates; Windows shows "unknown publisher".
+#
+# Kept SEPARATE from build-windows.yml (VST3) and manual-only, so iterating the first-ever MSVC
+# build of the native AAX never breaks the working VST3 release pipeline.
+#
+# Prerequisites (one-time, in repo Settings > Secrets and variables > Actions):
+#   - PACE_PASSWORD : the iLok account (cactuzz) password. Set by the owner; never stored in the repo.
+#   - AAX_SDK_DEPLOY_KEY : read-only SSH deploy key for cactuzzsound/aax-sdk-2-9-0 (already set).
+# And the sdk-assets release must hold eden-sdk-win64.zip (already uploaded).
+
+on:
+  workflow_dispatch:
+    inputs:
+      ara:
+        description: "Configure with ARA on (matches the VST3 build). Off keeps the AAX-only build lean."
+        type: boolean
+        default: false
+
+permissions:
+  contents: write   # gh release download/upload against the sdk-assets release
+
+jobs:
+  build-aax:
+    runs-on: windows-2022
+
+    env:
+      JUCE_TAG: "8.0.12"
+      LIBFVAD_COMMIT: "532ab66"
+      TONEFILL_WCGUID: "53B16D60-73F3-11F1-B005-005056920FF7"
+      ILOK_ACCOUNT: "cactuzz"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Clone JUCE ${{ env.JUCE_TAG }}
+        run: git clone --branch ${{ env.JUCE_TAG }} --depth 1 https://github.com/juce-framework/JUCE.git C:/JUCE
+
+      - name: Clone libfvad
+        run: |
+          git clone https://github.com/dpirch/libfvad.git external/libfvad
+          git -C external/libfvad checkout ${{ env.LIBFVAD_COMMIT }}
+
+      # ── AAX SDK (full, private) via read-only deploy key ────────────────────────
+      - name: Fetch AAX SDK (private, deploy key)
+        shell: bash
+        env:
+          AAX_SDK_DEPLOY_KEY: ${{ secrets.AAX_SDK_DEPLOY_KEY }}
+        run: |
+          set -e
+          if [ -z "$AAX_SDK_DEPLOY_KEY" ]; then echo "AAX_SDK_DEPLOY_KEY secret is not set"; exit 1; fi
+          mkdir -p "$HOME/.ssh"
+          printf '%s\n' "$AAX_SDK_DEPLOY_KEY" > "$HOME/.ssh/aax_key"
+          chmod 600 "$HOME/.ssh/aax_key"
+          ssh-keyscan github.com >> "$HOME/.ssh/known_hosts" 2>/dev/null
+          GIT_SSH_COMMAND="ssh -i $HOME/.ssh/aax_key -o IdentitiesOnly=yes" \
+            git clone --depth 1 git@github.com:cactuzzsound/aax-sdk-2-9-0.git external/aax-sdk
+          test -f external/aax-sdk/Interfaces/AAX.h
+          test -f external/aax-sdk/Libs/AAXLibrary/CMakeLists.txt
+
+      # ── Install Eden SDK (wraptool + iloktool + LicenseD) ───────────────────────
+      # Ported from LostComzz: a real MSI install (not msiexec /a) so the LicenseD
+      # service that talks to the cloud signing service is installed and running.
+      - name: Install Eden SDK (wraptool + LicenseD)
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $repo   = $env:GITHUB_REPOSITORY
+          $msiZip = "C:\wt\eden-sdk-win64.zip"
+          $msiDir = "C:\wt\msidir"
+          New-Item -ItemType Directory -Force -Path "C:\wt" | Out-Null
+
+          function Wait-MsiFree {
+            for ($i = 0; $i -lt 30; $i++) {
+              if (-not (Get-Process msiexec -ErrorAction SilentlyContinue)) { return }
+              Start-Sleep -Seconds 2
+            }
+          }
+
+          gh release download sdk-assets --repo $repo -p "eden-sdk-win64.zip" -D "C:\wt"
+          if (-not (Test-Path $msiZip)) { Write-Error "eden-sdk-win64.zip not found in sdk-assets"; exit 1 }
+          Expand-Archive -Path $msiZip -DestinationPath $msiDir -Force
+
+          $edenMsi = Get-ChildItem $msiDir -Filter "*.msi" | Sort-Object Length -Descending | Select-Object -First 1
+          if (-not $edenMsi) { Write-Error "Eden MSI missing after extract"; exit 1 }
+          Wait-MsiFree
+          $log = "C:\wt\install.log"
+          $a = Start-Process msiexec.exe `
+                -ArgumentList "/i","`"$($edenMsi.FullName)`"","/qn","/norestart",`
+                              "ADDLOCAL=ALL","REBOOT=ReallySuppress","/l*v","`"$log`"" `
+                -Wait -PassThru
+          echo "msiexec /i exit code: $($a.ExitCode)"
+          if ($a.ExitCode -ne 0 -and $a.ExitCode -ne 3010) { Write-Error "Eden SDK install failed ($($a.ExitCode))"; exit 1 }
+
+          $roots = @("C:\Program Files\PACEAntiPiracy","C:\Program Files (x86)\PACEAntiPiracy",
+                     "C:\Program Files","C:\Program Files (x86)","C:\ProgramData")
+          $wt = $null; $it = $null
+          foreach ($r in $roots) {
+            if (-not (Test-Path $r)) { continue }
+            if (-not $wt) { $wt = Get-ChildItem $r -Recurse -Force -Filter "wraptool.exe" -ErrorAction SilentlyContinue | Select-Object -First 1 }
+            if (-not $it) { $it = Get-ChildItem $r -Recurse -Force -Filter "iloktool.exe" -ErrorAction SilentlyContinue | Select-Object -First 1 }
+            if ($wt -and $it) { break }
+          }
+          if (-not $wt) { Write-Error "wraptool.exe not found after install"; exit 1 }
+          echo "wraptool: $($wt.FullName)"
+          echo "iloktool: $(if ($it) { $it.FullName } else { '(not found)' })"
+
+          $svcs = Get-Service -ErrorAction SilentlyContinue |
+                  Where-Object { $_.Name -match 'PACE|Eden|iLok' -or $_.DisplayName -match 'PACE License|iLok|Eden' }
+          foreach ($s in $svcs) {
+            if ($s.Status -ne 'Running') { try { Start-Service $s.Name -ErrorAction Stop } catch {} }
+          }
+
+          echo "WRAPTOOL=$($wt.FullName)" >> $env:GITHUB_ENV
+          if ($it) { echo "ILOKTOOL=$($it.FullName)" >> $env:GITHUB_ENV }
+          $global:LASTEXITCODE = 0
+          exit 0
+
+      # ── Configure + build the native AAX (CMake) ────────────────────────────────
+      - name: Configure (CMake, VS 2022 x64, AAX on)
+        shell: bash
+        run: |
+          ARA_FLAG="OFF"
+          if [ "${{ github.event.inputs.ara }}" = "true" ]; then ARA_FLAG="ON"; fi
+          cmake -B build -G "Visual Studio 17 2022" -A x64 \
+            -DJUCE_DIR=C:/JUCE \
+            -DTONEFILL_ENABLE_ARA=$ARA_FLAG \
+            -DAAX_SDK_PATH="${{ github.workspace }}/external/aax-sdk" \
+            -DTONEFILL_BUILD_TESTS=OFF \
+            -DTONEFILL_BUILD_TOOLS=OFF
+
+      - name: Build AAX (Release)
+        run: cmake --build build --config Release --target ToneFillAS --parallel
+
+      - name: Locate built AAX
+        shell: powershell
+        run: |
+          $aax = Get-ChildItem -Path build -Recurse -Directory -Filter "ToneFill.aaxplugin" | Select-Object -First 1
+          if (-not $aax) { Write-Error "ToneFill.aaxplugin not found under build/"; exit 1 }
+          echo "AAX_PATH=$($aax.FullName)" >> $env:GITHUB_ENV
+          echo "Found AAX: $($aax.FullName)"
+
+      # ── Upload the UNSIGNED AAX (so a failed sign can be retried / inspected) ────
+      - name: Upload unsigned AAX artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ToneFill-Windows-AAX-unsigned
+          path: ${{ env.AAX_PATH }}
+          retention-days: 7
+
+      # ── PACE sign via iLok Cloud + self-signed cert (no paid cert) ──────────────
+      - name: Sign AAX with wraptool (iLok Cloud)
+        shell: powershell
+        timeout-minutes: 20
+        env:
+          PACE_PASSWORD: ${{ secrets.PACE_PASSWORD }}
+        run: |
+          if (-not $env:PACE_PASSWORD) { Write-Error "PACE_PASSWORD secret is not set"; exit 1 }
+          New-Item -ItemType Directory -Force -Path "C:\wt" | Out-Null
+
+          $certPath = "C:\wt\selfsign.pfx"; $certPwd = "selfsign-tonefill"
+          $sc = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=cactuzz sound" `
+                  -CertStoreLocation "Cert:\CurrentUser\My" -KeyExportPolicy Exportable -KeySpec Signature `
+                  -KeyUsage DigitalSignature -NotAfter (Get-Date).AddYears(5)
+          $sp = ConvertTo-SecureString $certPwd -AsPlainText -Force
+          Export-PfxCertificate -Cert "Cert:\CurrentUser\My\$($sc.Thumbprint)" -FilePath $certPath -Password $sp | Out-Null
+          Write-Host "Self-signed cert: $($sc.Thumbprint)"
+          $stdin = "C:\wt\empty.in"; New-Item -ItemType File -Force -Path $stdin | Out-Null
+
+          function Invoke-Tool($exe, $argList, $timeoutSec, $label) {
+            Write-Host ">>> $label (timeout ${timeoutSec}s)"
+            $o = "C:\wt\$label.out"; $e = "C:\wt\$label.err"
+            $p = Start-Process -FilePath $exe -ArgumentList $argList -NoNewWindow -PassThru `
+                  -RedirectStandardInput $stdin -RedirectStandardOutput $o -RedirectStandardError $e
+            $null = $p.Handle
+            if (-not $p.WaitForExit($timeoutSec * 1000)) {
+              Write-Host "!!! $label TIMED OUT - killing"; try { $p.Kill() } catch {}
+              if (Test-Path $o) { Get-Content $o | Write-Host }; if (Test-Path $e) { Get-Content $e | Write-Host }
+              return 124
+            }
+            $p.WaitForExit()
+            if (Test-Path $o) { Get-Content $o | Write-Host }; if (Test-Path $e) { Get-Content $e | Write-Host }
+            $code = $p.ExitCode; Write-Host "<<< $label exit: $code"; return $code
+          }
+
+          if ($env:ILOKTOOL) {
+            $rc = Invoke-Tool $env:ILOKTOOL `
+              @('cloud','--open','--account',$env:ILOK_ACCOUNT,'--password',$env:PACE_PASSWORD,'-v') 180 'iloktool-open'
+            if ($rc -ne 0) { Write-Error "iloktool cloud --open failed ($rc)"; exit 1 }
+          } else { echo "WARNING: ILOKTOOL not set - trying sign without an explicit cloud session" }
+
+          $realST = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Recurse -Filter "signtool.exe" -ErrorAction SilentlyContinue |
+                    Where-Object { $_.FullName -match '\\x64\\' } | Sort-Object FullName -Descending | Select-Object -First 1
+          Write-Host "real signtool: $(if ($realST) { $realST.FullName } else { '(NOT FOUND)' })"
+          $myST = "C:\wt\mysigntool.cmd"
+          Set-Content -Path $myST -Encoding ASCII -Value @('@echo off','echo === SIGNTOOL ARGS: %* === 1>&2',('"' + $realST.FullName + '" %*'),'exit /b %ERRORLEVEL%')
+
+          Invoke-Tool $env:WRAPTOOL @('repair') 90 'wraptool-repair' | Out-Null
+
+          $signRc = Invoke-Tool $env:WRAPTOOL `
+            @('sign','--verbose','--account',$env:ILOK_ACCOUNT,'--password',$env:PACE_PASSWORD,
+              '--signid',$sc.Thumbprint,'--wcguid',$env:TONEFILL_WCGUID,'--signtool',$myST,
+              '--allowsigningservice','--in',$env:AAX_PATH,'--out',$env:AAX_PATH) 150 'wraptool-sign'
+
+          if ($env:ILOKTOOL) { Invoke-Tool $env:ILOKTOOL @('cloud','--close') 120 'iloktool-close' | Out-Null }
+          if ($signRc -ne 0) { Write-Error "wraptool sign failed ($signRc)"; exit 1 }
+          echo "AAX signed with PACE wraptool"
+
+      - name: Verify signature
+        shell: powershell
+        run: |
+          Invoke-Expression "& `"$env:WRAPTOOL`" verify --verbose --in `"$env:AAX_PATH`"" 2>&1 | Select-Object -Last 12
+
+      - name: Upload SIGNED AAX artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ToneFill-Windows-AAX-signed
+          path: ${{ env.AAX_PATH }}
+          retention-days: 7
