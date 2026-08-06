@@ -151,13 +151,23 @@ jobs:
       - name: Build AAX (Release)
         run: cmake --build build --config Release --target ToneFillAS --parallel
 
-      - name: Locate built AAX
+      # The SDK's aax_plugin() only lays out the Windows Contents/x64 bundle when
+      # AAX_SDK_PLUGIN_OUTPUT_DIRECTORY is set; otherwise the linker emits a bare
+      # ToneFill.aaxplugin DLL. Assemble the folder bundle Pro Tools/wraptool expect:
+      #   ToneFill.aaxplugin/Contents/x64/ToneFill.aaxplugin
+      - name: Assemble AAX bundle
         shell: powershell
         run: |
-          $aax = Get-ChildItem -Path build -Recurse -Directory -Filter "ToneFill.aaxplugin" | Select-Object -First 1
-          if (-not $aax) { Write-Error "ToneFill.aaxplugin not found under build/"; exit 1 }
-          echo "AAX_PATH=$($aax.FullName)" >> $env:GITHUB_ENV
-          echo "Found AAX: $($aax.FullName)"
+          $dll = Get-ChildItem -Path build -Recurse -File -Filter "ToneFill.aaxplugin" |
+                 Sort-Object Length -Descending | Select-Object -First 1
+          if (-not $dll) { Write-Error "ToneFill.aaxplugin DLL not found under build/"; exit 1 }
+          Write-Host "DLL: $($dll.FullName) ($([math]::Round($dll.Length/1KB,1)) KB)"
+          $bundle = Join-Path $env:GITHUB_WORKSPACE "build\aax-bundle\ToneFill.aaxplugin"
+          $x64 = Join-Path $bundle "Contents\x64"
+          New-Item -ItemType Directory -Force -Path $x64 | Out-Null
+          Copy-Item $dll.FullName (Join-Path $x64 "ToneFill.aaxplugin") -Force
+          echo "AAX_PATH=$bundle" >> $env:GITHUB_ENV
+          echo "Assembled bundle: $bundle"
 
       # ── Upload the UNSIGNED AAX (so a failed sign can be retried / inspected) ────
       - name: Upload unsigned AAX artifact
