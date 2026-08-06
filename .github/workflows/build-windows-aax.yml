@@ -229,7 +229,7 @@ jobs:
           $signRc = Invoke-Tool $env:WRAPTOOL `
             @('sign','--verbose','--account',$env:ILOK_ACCOUNT,'--password',$env:PACE_PASSWORD,
               '--signid',$sc.Thumbprint,'--wcguid',$env:TONEFILL_WCGUID,'--signtool',$myST,
-              '--allowsigningservice','--in',$env:AAX_PATH,'--out',$env:AAX_PATH) 150 'wraptool-sign'
+              '--allowsigningservice','--in',$env:AAX_PATH,'--out',$env:AAX_PATH) 420 'wraptool-sign'
 
           if ($env:ILOKTOOL) { Invoke-Tool $env:ILOKTOOL @('cloud','--close') 120 'iloktool-close' | Out-Null }
           if ($signRc -ne 0) { Write-Error "wraptool sign failed ($signRc)"; exit 1 }
