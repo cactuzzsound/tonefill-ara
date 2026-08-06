@@ -6,6 +6,10 @@ if(NOT AAX_SDK_PATH OR NOT EXISTS "${AAX_SDK_PATH}/Interfaces/AAX.h")
     return()
 endif()
 
+# Normalise to forward slashes: a Windows backslash path (D:\a\...) embedded in the add_library()
+# source strings below is otherwise parsed as an invalid escape ('\a', '\t', ...).
+file(TO_CMAKE_PATH "${AAX_SDK_PATH}" AAX_SDK_PATH)
+
 message(STATUS "ToneFill AAX (native): enabled (SDK ${AAX_SDK_PATH}).")
 
 include("${AAX_SDK_PATH}/cmake/AAX_SDKFunctions.cmake")
