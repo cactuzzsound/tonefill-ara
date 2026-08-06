@@ -62,7 +62,11 @@ target_include_directories(ToneFillAS PRIVATE
     "${AAX_SDK_PATH}/Interfaces" "${AAX_SDK_PATH}/Interfaces/ACF"
     "${CMAKE_SOURCE_DIR}/src")
 
-target_compile_options(ToneFillAS PRIVATE -Wno-multichar)
+# -Wno-multichar is a GCC/Clang flag (the AAX SDK uses multichar type-ID literals); MSVC rejects it
+# as an invalid cl argument and accepts multichar literals anyway.
+if(NOT MSVC)
+    target_compile_options(ToneFillAS PRIVATE -Wno-multichar)
+endif()
 
 # GUI: host a JUCE component in PT's native view. Needs juce_gui_basics (pulls graphics/events) and
 # the embedded logo (ToneFillAssets -> BinaryData.h). JUCE definitions match the plugin build so the
