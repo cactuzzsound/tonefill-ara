@@ -77,8 +77,12 @@ if ($LASTEXITCODE -ne 0) { throw "iloktool cloud --open failed ($LASTEXITCODE) -
 try {
     # --- 6. Sign -----------------------------------------------------------------
     Step "Signing with wraptool"
+    # --allowsigningservice: the PACE cloud signing service performs the Authenticode signature
+    # server-side, so no local "Eden Tools" license is required on this machine (the dev signing
+    # license may live on a physical iLok elsewhere). The cloud session authorizes it. This is the
+    # step that hung on GitHub's headless runner, but completes fine on an interactive VM.
     $args = @('sign','--verbose','--account',$Account,'--password',$Pace,
-              '--signid',$sc.Thumbprint,'--wcguid',$Wcguid,
+              '--signid',$sc.Thumbprint,'--wcguid',$Wcguid,'--allowsigningservice',
               '--in',$Bundle,'--out',$Bundle)
     if ($signtool) { $args += @('--signtool',$signtool.FullName) }
     & $wt.FullName @args

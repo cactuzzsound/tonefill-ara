@@ -141,6 +141,12 @@
     H / V buttons, pan with the wheel (up/down) and side-wheel (left/right) or by dragging the canvas,
     and use <b>Speed</b> and <b>Bright</b> to tune the navigation and readability. Your edges are saved
     with the clip.</p>
+    <p style="margin-top:10px"><span class="chip">Auto</span> (in the band editor) lets ToneFill choose
+    the layout for you. It runs a proper analysis of the <i>clean</i> room tone this clip already selected —
+    a long-term average spectrum plus how steady each frequency is over time — finds where the room's tone
+    concentrates (mains hum, HVAC, resonances, broadband floor) and how many such regions there are, and
+    places the band edges in the quiet valleys between them. The <span class="chip">Bands</span> knob then
+    follows the count it found. It is a starting point, not a lock: drag any edge afterwards to fine-tune.</p>
   </div>
 
   <h2><span class="dot" style="background:var(--coral)"></span>Hiss Filter <span style="color:var(--muted);letter-spacing:0;text-transform:none;font-weight:400;font-size:12px">(Enhance only)</span></h2>
@@ -219,7 +225,7 @@
 
   <footer>
     <span>ToneFill — Seamless Room Tone · © cactuzz sound</span>
-    <span>v0.9.3</span>
+    <span>v0.9.4</span>
   </footer>
 
 </div>
