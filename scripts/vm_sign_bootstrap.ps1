@@ -69,31 +69,19 @@ $bstr   = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
 $Pace   = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr)
 [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
 
-# --- 5. Open iLok Cloud session -------------------------------------------------
-Step "Opening iLok Cloud session"
-& $it.FullName cloud --open --account $Account --password $Pace -v
-if ($LASTEXITCODE -ne 0) { throw "iloktool cloud --open failed ($LASTEXITCODE) - check the password / iLok LM login." }
+# --- 5. Sign (physical iLok present via VirtualHere) ----------------------------
+# The Eden Tools license AND the publisher signing certificate live on the physical iLok that is now
+# shared into this VM, so wraptool reads them locally -- no iLok Cloud session, no signing service.
+Step "Signing with wraptool"
+$args = @('sign','--verbose','--account',$Account,'--password',$Pace,
+          '--signid',$sc.Thumbprint,'--wcguid',$Wcguid,
+          '--in',$Bundle,'--out',$Bundle)
+if ($signtool) { $args += @('--signtool',$signtool.FullName) }
+& $wt.FullName @args
+if ($LASTEXITCODE -ne 0) { throw "wraptool sign failed ($LASTEXITCODE)" }
 
-try {
-    # --- 6. Sign -----------------------------------------------------------------
-    Step "Signing with wraptool"
-    # Local signing using the credentials in the open iLok Cloud session: the Eden Tools license and
-    # the publisher signing certificate were deposited to "cactuzz's Cloud", so wraptool finds them
-    # via the session. (No --allowsigningservice: that routes to PACE's server-side signing service,
-    # which this publisher isn't enrolled in.)
-    $args = @('sign','--verbose','--account',$Account,'--password',$Pace,
-              '--signid',$sc.Thumbprint,'--wcguid',$Wcguid,
-              '--in',$Bundle,'--out',$Bundle)
-    if ($signtool) { $args += @('--signtool',$signtool.FullName) }
-    & $wt.FullName @args
-    if ($LASTEXITCODE -ne 0) { throw "wraptool sign failed ($LASTEXITCODE)" }
-
-    Step "Verifying"
-    & $wt.FullName verify --verbose --in $Bundle
-}
-finally {
-    & $it.FullName cloud --close | Out-Null
-}
+Step "Verifying"
+& $wt.FullName verify --verbose --in $Bundle
 
 # --- 7. Install for Pro Tools ---------------------------------------------------
 Step "Installing to the Pro Tools plug-ins folder"
