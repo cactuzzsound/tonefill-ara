@@ -81,13 +81,22 @@ if ($signtool) { $args += @('--signtool',$signtool.FullName) }
 if ($LASTEXITCODE -ne 0) { throw "wraptool sign failed ($LASTEXITCODE)" }
 
 Step "Verifying"
-& $wt.FullName verify --verbose --in $Bundle
+# On Windows 'verify' takes the binary file, not the bundle folder.
+& $wt.FullName verify --verbose --in (Join-Path $Bundle 'Contents\x64\ToneFill.aaxplugin')
 
-# --- 7. Install for Pro Tools ---------------------------------------------------
+Write-Host "`nSIGNED: $Bundle" -ForegroundColor Green
+
+# --- 7. Install for Pro Tools (needs an elevated shell) -------------------------
 Step "Installing to the Pro Tools plug-ins folder"
 $dest = "C:\Program Files\Common Files\Avid\Audio\Plug-Ins\ToneFill.aaxplugin"
-if (Test-Path $dest) { Remove-Item $dest -Recurse -Force }
-Copy-Item $Bundle $dest -Recurse -Force
-
-Write-Host "`nDONE - signed + installed:" -ForegroundColor Green
-Write-Host "  $dest"
+$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if ($isAdmin) {
+    if (Test-Path $dest) { Remove-Item $dest -Recurse -Force }
+    Copy-Item $Bundle $dest -Recurse -Force
+    Write-Host "`nDONE - signed + installed:" -ForegroundColor Green
+    Write-Host "  $dest"
+} else {
+    Write-Host "`nSigned OK, but NOT installed (this shell is not elevated)." -ForegroundColor Yellow
+    Write-Host "Run this in an Administrator PowerShell to install for Pro Tools:"
+    Write-Host "  Copy-Item `"$Bundle`" `"$dest`" -Recurse -Force"
+}
