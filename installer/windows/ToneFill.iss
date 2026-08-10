@@ -1,10 +1,13 @@
-; Inno Setup script for ToneFill (Windows VST3, ARA-enabled).
+; Inno Setup script for ToneFill (Windows VST3 + AAX).
 ; Compiled by the GitHub Actions workflow (.github/workflows/build-windows.yml):
 ;   ISCC.exe /DAppVersion=1.0.0 installer\windows\ToneFill.iss
-; The workflow stages the built bundle into installer\windows\stage\ToneFill.vst3 first.
+; The workflow stages:
+;   installer\windows\stage\ToneFill.vst3       (built by CI)
+;   installer\windows\stage\ToneFill.aaxplugin  (signed AAX, downloaded from the release; optional)
+; When the AAX bundle isn't staged, the AAX files are skipped and a VST3-only installer is built.
 
 #ifndef AppVersion
-  #define AppVersion "0.9.3"
+  #define AppVersion "0.9.4"
 #endif
 #define AppName "ToneFill"
 #define AppPublisher "cactuzz sound"
@@ -17,7 +20,7 @@ AppVersion={#AppVersion}
 AppVerName={#AppName} {#AppVersion}
 AppPublisher={#AppPublisher}
 AppPublisherURL={#AppURL}
-DefaultDirName={commoncf64}\VST3
+DefaultDirName={commoncf64}
 DisableDirPage=yes
 DisableProgramGroupPage=yes
 DisableReadyPage=no
@@ -32,12 +35,24 @@ WizardStyle=modern
 UninstallDisplayName={#AppName} {#AppVersion}
 
 [Messages]
-WelcomeLabel2=This will install {#AppName} {#AppVersion} (VST3, with ARA) on your computer.%n%nThe plugin is installed to the shared VST3 folder so every host can find it.
+WelcomeLabel2=This will install {#AppName} {#AppVersion} on your computer.%n%nChoose the plug-in formats to install. VST3 (with ARA) goes to the shared VST3 folder; AAX goes to the Pro Tools plug-ins folder.
+
+[Types]
+Name: "full";   Description: "VST3 + AAX (recommended)"
+Name: "custom"; Description: "Choose formats"; Flags: iscustom
+
+[Components]
+Name: "vst3"; Description: "VST3 plug-in (with ARA) - Nuendo, Cubase, Reaper, ..."; Types: full custom
+Name: "aax";  Description: "AAX plug-in - Pro Tools";                               Types: full custom
 
 [Files]
 ; VST3 bundle (folder) -> C:\Program Files\Common Files\VST3\ToneFill.vst3
 Source: "stage\ToneFill.vst3\*"; DestDir: "{commoncf64}\VST3\ToneFill.vst3"; \
-    Flags: ignoreversion recursesubdirs createallsubdirs
+    Components: vst3; Flags: ignoreversion recursesubdirs createallsubdirs
+; AAX bundle (folder) -> C:\Program Files\Common Files\Avid\Audio\Plug-Ins\ToneFill.aaxplugin
+; skipifsourcedoesntexist: build a VST3-only installer when the signed AAX wasn't staged.
+Source: "stage\ToneFill.aaxplugin\*"; DestDir: "{commoncf64}\Avid\Audio\Plug-Ins\ToneFill.aaxplugin"; \
+    Components: aax; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
 ; Manual next to the plugin docs.
 Source: "stage\manual.html"; DestDir: "{commonpf64}\ToneFill"; Flags: ignoreversion skipifsourcedoesntexist
 
@@ -50,3 +65,4 @@ Filename: "{commonpf64}\ToneFill\manual.html"; Description: "Open the ToneFill m
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{commoncf64}\VST3\ToneFill.vst3"
+Type: filesandordirs; Name: "{commoncf64}\Avid\Audio\Plug-Ins\ToneFill.aaxplugin"
