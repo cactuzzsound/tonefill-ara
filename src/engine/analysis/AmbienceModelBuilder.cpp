@@ -173,7 +173,7 @@ juce::AudioBuffer<float> selectCleanAmbience (const juce::AudioBuffer<float>& sr
     if (srj > 0.05f)
     {
         const int   W = juce::jmax (8, (int) (1.0 * sr / H)); // ~1 s local floor window
-        const float eventMargin = 1.25f + (1.0f - srj) * 2.5f; // 1.25x (srj=1) .. 3.75x (srj~0)
+        const float eventMargin = 2.5f; // transient/event gate, INDEPENDENT of Voice Reject (was 1.25 .. 3.75)
         std::vector<char> event ((std::size_t) numFrames, 0);
         for (int f = 0; f < numFrames; ++f)
         {
@@ -201,8 +201,6 @@ juce::AudioBuffer<float> selectCleanAmbience (const juce::AudioBuffer<float>& sr
     {
         const int fw = juce::jmax (3, (int) (0.4 * sr / H)); // ~0.4 s window
         const float fl = juce::jlimit (0.0f, 1.0f, flatness);
-        const float allowedCoV  = 0.02f + (1.0f - fl) * 0.6f; // level steadiness
-        const float allowedTilt = 0.15f + (1.0f - fl) * 0.9f; // spectral (tilt) steadiness
         auto localSd = [&] (const std::vector<float>& v, int a, int b)
         {
             double mean = 0.0; int cnt = 0;
@@ -212,14 +210,38 @@ juce::AudioBuffer<float> selectCleanAmbience (const juce::AudioBuffer<float>& sr
             for (int k = a; k <= b; ++k) { const double d = v[(std::size_t) k] - mean; var += d * d; }
             return std::make_pair (std::sqrt (var / juce::jmax (1, cnt)), mean);
         };
+
+        // Per-frame local level CoV and spectral drift (how "un-flat" each frame's neighbourhood is).
+        std::vector<double> covF ((std::size_t) numFrames, 0.0), sdtF ((std::size_t) numFrames, 0.0);
         for (int f = 0; f < numFrames; ++f)
         {
             const int a = juce::jmax (0, f - fw), b = juce::jmin (numFrames - 1, f + fw);
-            const auto lvl  = localSd (frameRms, a, b);
-            const double cov = lvl.first / juce::jmax (1.0e-7, lvl.second); // level CoV
-            const double sdT = localSd (tiltA, a, b).first + localSd (tiltB, a, b).first; // spectral drift
-            if (cov > allowedCoV || sdT > allowedTilt) flat[(std::size_t) f] = 0; // not stationary
+            const auto lvl = localSd (frameRms, a, b);
+            covF[(std::size_t) f] = lvl.first / juce::jmax (1.0e-7, lvl.second);
+            sdtF[(std::size_t) f] = localSd (tiltA, a, b).first + localSd (tiltB, a, b).first;
         }
+
+        // Rank frames by a combined "un-flatness" score and KEEP THE FLATTEST K%, where K shrinks as
+        // Flatness rises. Percentile-based instead of an absolute threshold, which gives two properties
+        // the knob needs: (1) nested by construction -- raising Flatness is always a strict SUBSET, so
+        // relaxing it only ever ADDS material (never swaps the selection to a different spot); and
+        // (2) never empty -- there is always a flattest K%, so high Flatness can't zero the selection
+        // ("0 chunks"). Each score component is normalised by its own median so level-CoV and spectral
+        // drift are comparable regardless of the material.
+        auto medianOf = [] (std::vector<double> v)
+        { if (v.empty()) return 1.0; std::sort (v.begin(), v.end()); return juce::jmax (1.0e-9, v[v.size() / 2]); };
+        const double medCov = medianOf (std::vector<double> (covF.begin(), covF.end()));
+        const double medSdt = medianOf (std::vector<double> (sdtF.begin(), sdtF.end()));
+        std::vector<double> score ((std::size_t) numFrames);
+        for (int f = 0; f < numFrames; ++f)
+            score[(std::size_t) f] = covF[(std::size_t) f] / medCov + sdtF[(std::size_t) f] / medSdt;
+        std::vector<double> sorted (score);
+        std::sort (sorted.begin(), sorted.end());
+        const double keepFrac = juce::jlimit (0.08, 0.90, 0.90 - (double) fl * 0.82); // fl=0 -> 90%, fl=1 -> 8%
+        const int idx = juce::jlimit (0, numFrames - 1, (int) std::llround (keepFrac * (numFrames - 1)));
+        const double scoreThresh = sorted[(std::size_t) idx];
+        for (int f = 0; f < numFrames; ++f)
+            flat[(std::size_t) f] = (score[(std::size_t) f] <= scoreThresh) ? 1 : 0;
     }
 
     // In Manual (trust) the LEVEL gate is skipped (you picked the regions), but Voice Reject and
@@ -249,7 +271,10 @@ juce::AudioBuffer<float> selectCleanAmbience (const juce::AudioBuffer<float>& sr
     };
     bool  haveCluster = false;
     float cT1 = 0.0f, cT2 = 0.0f, cT3 = 0.0f, sT1 = 1.0f, sT2 = 1.0f, sT3 = 1.0f;
-    const float clusterK = 3.5f - srj * 2.0f; // tolerance in MADs: 1.5 (srj=1) .. 3.5 (srj=0)
+    // Colour-cluster tolerance is INDEPENDENT of Voice Reject. Tying it to Voice Reject let that knob
+    // re-classify frames via the (median-relative) colour gate, so nudging Voice Reject swapped the
+    // selection non-monotonically. Fixed, moderate tolerance keeps Voice Reject to the speech gates.
+    const float clusterK = 2.5f; // tolerance in MADs (was 1.5 .. 3.5 via Voice Reject)
     {
         // Reference = the MOST-CERTAIN room tone (flat, non-speech, quietest ~40% by level),
         // computed INDEPENDENTLY of Clean Level. This anchors the "dominant colour" so raising

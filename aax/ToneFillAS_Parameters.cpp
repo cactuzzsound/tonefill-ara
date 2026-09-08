@@ -75,7 +75,7 @@ AAX_Result ToneFillAS_Parameters::EffectInit()
     addFloat (kParamGain,     "Output",       0.00f, -24.0f, 24.0f);
     // Modes.
     addBool (kParamEnhance,  "Enhance",      false, "off", "on");
-    addBool (kParamExperim,  "Experimental", false, "classic", "experimental");
+    addBool (kParamExperim,  "Experimental", true,  "classic", "experimental"); // Experimental is the reliable engine -> default
     // Hiss filter (Enhance only; baked into the offline render).
     addBool  (kParamHissOn,   "Hiss Filter", false, "off", "on");
     addFloat (kParamHissFreq, "Hiss Freq",   9000.0f, 3000.0f, 15000.0f);

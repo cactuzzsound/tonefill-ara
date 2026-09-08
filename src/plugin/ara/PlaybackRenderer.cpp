@@ -107,15 +107,20 @@ public:
             // Quality-first: analyse as much of the source as fits a memory budget rather than a short
             // fixed window -- more material means better clean-tone selection on long takes. Degrades
             // gracefully (halve on allocation failure) instead of aborting on a huge file.
+            // The ARA source may run at a different sample rate than the project/playback rate (e.g. a
+            // 96 kHz file in a 48 kHz session). ARAAudioSourceReader reads at the FILE'S native rate,
+            // so we read here in native samples and resample to the playback rate below -- otherwise
+            // the fill plays at the wrong speed (96 k read as 48 k = half speed / octave down).
+            const double nativeSr = source->getSampleRate() > 0.0 ? source->getSampleRate() : sampleRate;
             const long long kByteBudget    = 1500LL * 1024 * 1024;                 // ~1.5 GB for src + learn
             const long long bytesPerSample = (long long) juce::jmax (1, channels) * 4 * 2;
-            const long long maxByMem       = juce::jmax ((long long) (sampleRate * 5), kByteBudget / bytesPerSample);
-            long long want = juce::jmin (total, (long long) (capSec * sampleRate));
+            const long long maxByMem       = juce::jmax ((long long) (nativeSr * 5), kByteBudget / bytesPerSample);
+            long long want = juce::jmin (total, (long long) (capSec * nativeSr));
             want = juce::jmin (want, maxByMem);
             if (want <= 0) return false;
 
             bool alloc = false;
-            for (int tries = 0; tries < 8 && want > (long long) (sampleRate * 5); ++tries)
+            for (int tries = 0; tries < 8 && want > (long long) (nativeSr * 5); ++tries)
             {
                 try { src.setSize (channels, (int) want); alloc = true; break; }
                 catch (...) { araLog ("readSource: alloc failed at " + juce::String (want) + ", halving"); want /= 2; }
@@ -123,7 +128,8 @@ public:
             if (! alloc) { try { src.setSize (channels, (int) juce::jmax ((long long) 1, want)); } catch (...) { return false; } }
             n = (int) want;
             araLog ("readSource: total=" + juce::String (total) + " read=" + juce::String (n)
-                    + " ch=" + juce::String (channels) + " sr=" + juce::String (sampleRate) + " cap=" + juce::String (capSec));
+                    + " ch=" + juce::String (channels) + " sr=" + juce::String (sampleRate)
+                    + " nativeSr=" + juce::String (source->getSampleRate()) + " cap=" + juce::String (capSec));
 
             bool gotAudio = false;
             for (int attempt = 0; attempt < 30 && ! threadShouldExit(); ++attempt)
@@ -143,6 +149,29 @@ public:
                 wait (200);
             }
             if (! gotAudio) return false;
+
+            // Resample the native-rate source to the playback rate when they differ, so analysis and
+            // the synthesized fill are at the project rate (fixes half-speed on e.g. a 96 kHz file in
+            // a 48 kHz session). Lagrange interpolation: fine for room tone (little energy near Nyquist).
+            if (std::abs (nativeSr - sampleRate) > 1.0)
+            {
+                const double ratio = nativeSr / sampleRate;           // input samples consumed per output sample
+                const int nOut = (int) std::llround ((double) n / ratio);
+                if (nOut > 0)
+                {
+                    juce::AudioBuffer<float> rs (channels, nOut);
+                    for (int c = 0; c < channels; ++c)
+                    {
+                        juce::LagrangeInterpolator interp;
+                        interp.reset();
+                        interp.process (ratio, src.getReadPointer (c), rs.getWritePointer (c), nOut);
+                    }
+                    src.makeCopyOf (rs);
+                    n = nOut;
+                    araLog ("readSource: resampled nativeSr=" + juce::String (nativeSr) + " -> playbackSr="
+                            + juce::String (sampleRate) + " => " + juce::String (n) + " samples");
+                }
+            }
 
             // Mono detection: near-identical channels -> render one correlated channel.
             effCh = channels;
@@ -723,6 +752,21 @@ bool ToneFillPlaybackRenderer::processBlock (juce::AudioBuffer<float>& buffer,
     const auto numSamples = buffer.getNumSamples();
     const auto timeInSamples = positionInfo.getTimeInSamples().orFallback (0);
     const auto blockRange = juce::Range<juce::int64>::withStartAndLength (timeInSamples, (juce::int64) numSamples);
+
+    static std::atomic<bool> loggedPBrates { false };
+    if (! loggedPBrates.exchange (true))
+    {
+        long long regionSpan = 0;
+        for (const auto* r : getPlaybackRegions())
+        { regionSpan = r->getSampleRange (sampleRate, juce::ARAPlaybackRegion::IncludeHeadAndTail::no).getLength(); break; }
+        araLog ("PB rates: playbackSr=" + juce::String (sampleRate)
+                + " fillLen=" + juce::String ((double) data->length)
+                + " fillDur=" + juce::String (data->length / juce::jmax (1.0, sampleRate)) + "s"
+                + " regionSpan=" + juce::String ((double) regionSpan)
+                + " timeInSamples=" + juce::String ((double) timeInSamples)
+                + " bufCh=" + juce::String (buffer.getNumChannels())
+                + " fillCh=" + juce::String ((int) data->channels.size()));
+    }
 
     for (const auto playbackRegion : getPlaybackRegions())
     {

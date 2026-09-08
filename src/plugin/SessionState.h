@@ -34,7 +34,7 @@ struct SessionState
     std::atomic<float>         renderLength { 5.0f }; // seconds, for Export WAV
     std::atomic<bool>          manualMode { false };  // learn from user-selected regions
     std::atomic<bool>          wholeFile { false };   // analyze the whole item (vs first 4 min)
-    std::atomic<bool>          statisticalMode { false }; // Statistical selection (Design §E) vs Classic
+    std::atomic<bool>          statisticalMode { true };  // Statistical (Experimental) selection vs Classic; Experimental is the default
     std::atomic<bool>          spectralMode { false };    // Spectral Mosaic: per-band select + synth + sum
     std::atomic<int>           spectralBands { 7 };       // Spectral: number of analysis bands (3..12)
     std::atomic<bool>          spectralAdvanced { false };// Spectral: advanced band-range control

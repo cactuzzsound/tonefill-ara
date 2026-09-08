@@ -44,7 +44,9 @@ APVTS::ParameterLayout ParameterState::createLayout()
     layout.add (std::make_unique<AudioParameterChoice> (ParameterID { IDs::normUnit, 1 }, "Norm Unit",
         juce::StringArray { "dBFS", "LUFS" }, 1));
     layout.add (std::make_unique<juce::AudioParameterBool> (ParameterID { IDs::wholeFile, 1 }, "Analyze Whole File", false));
-    layout.add (std::make_unique<juce::AudioParameterBool> (ParameterID { IDs::statistical, 1 }, "Statistical Selection", false));
+    // Default to the Experimental (statistical) engine: it is the reliable selector; Classic over-rejects
+    // on dialogue-heavy material. New instances start on Experimental; saved sessions keep their choice.
+    layout.add (std::make_unique<juce::AudioParameterBool> (ParameterID { IDs::statistical, 1 }, "Statistical Selection", true));
     layout.add (std::make_unique<juce::AudioParameterBool> (ParameterID { IDs::spectral, 1 }, "Spectral Mosaic", false));
     layout.add (std::make_unique<juce::AudioParameterInt> (ParameterID { IDs::spectralBands, 1 }, "Spectral Bands", 3, 12, 7));
     layout.add (std::make_unique<juce::AudioParameterBool> (ParameterID { IDs::spectralAdv, 1 }, "Spectral Advanced", false));
