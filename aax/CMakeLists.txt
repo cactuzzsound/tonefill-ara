@@ -56,7 +56,8 @@ target_sources(ToneFillAS PRIVATE
     ToneFillAS_HostProcessor.cpp
     ToneFillAS_GUI.cpp
     ASView.cpp
-    "${CMAKE_SOURCE_DIR}/src/plugin/ui/SpectralEditor.cpp")
+    "${CMAKE_SOURCE_DIR}/src/plugin/ui/SpectralEditor.cpp"
+    "${CMAKE_SOURCE_DIR}/src/plugin/ui/EqView.cpp")
 
 target_include_directories(ToneFillAS PRIVATE
     "${AAX_SDK_PATH}/Interfaces" "${AAX_SDK_PATH}/Interfaces/ACF"

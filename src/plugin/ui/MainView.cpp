@@ -189,7 +189,18 @@ MainView::MainView (PluginProcessor& processor) : processor_ (processor)
     addAndMakeVisible (hissBtn_);
     hbA_ = std::make_unique<BA> (apvts, IDs::hissFilter, hissBtn_);
     // The EQ editor (graph + Freq/Gain/Q controls) expands under the action bar when EQ is on.
-    eqView_ = std::make_unique<EqView> (apvts);
+    EqView::Access eqAcc;
+    eqAcc.getReal = [&apvts] (int band, const char* field) -> float
+    {
+        if (auto* rp = apvts.getRawParameterValue (ParameterState::eqId (band + 1, field))) return rp->load();
+        return 0.0f;
+    };
+    eqAcc.setReal = [&apvts] (int band, const char* field, float v)
+    {
+        if (auto* p = apvts.getParameter (ParameterState::eqId (band + 1, field)))
+            p->setValueNotifyingHost (p->convertTo0to1 (v));
+    };
+    eqView_ = std::make_unique<EqView> (std::move (eqAcc));
     addChildComponent (*eqView_);
 
     tips_ = {

@@ -76,10 +76,25 @@ AAX_Result ToneFillAS_Parameters::EffectInit()
     // Modes.
     addBool (kParamEnhance,  "Enhance",      false, "off", "on");
     addBool (kParamExperim,  "Experimental", true,  "classic", "experimental"); // Experimental is the reliable engine -> default
-    // Hiss filter (Enhance only; baked into the offline render).
-    addBool  (kParamHissOn,   "Hiss Filter", false, "off", "on");
-    addFloat (kParamHissFreq, "Hiss Freq",   9000.0f, 3000.0f, 15000.0f);
-    addFloat (kParamHissQ,    "Hiss Q",      0.707f, 0.3f, 2.0f);
+    // Parametric EQ (Enhance only). Master enable + 5 flexible bands. Tapers are LINEAR here (the
+    // custom ASView applies its own knob skew); type order matches dsp::makeEqCoefficients.
+    addBool  (kParamHissOn,   "EQ",          false, "off", "on");
+    addFloat (kParamHissFreq, "Hiss Freq",   9000.0f, 3000.0f, 15000.0f); // legacy, unused
+    addFloat (kParamHissQ,    "Hiss Q",      0.707f, 0.3f, 2.0f);         // legacy, unused
+    {
+        const int   defType[5] = { 3, 1, 0, 0, 4 };
+        const float defFreq[5] = { 40.0f, 150.0f, 1000.0f, 5000.0f, 9000.0f };
+        const float defQ   [5] = { 0.707f, 0.707f, 1.0f, 1.0f, 0.707f };
+        for (int b = 1; b <= kEqBandsAAX; ++b)
+        {
+            const int i = b - 1;
+            addBool  (eqAaxId (b, "on").c_str(),   ("EQ " + std::to_string (b) + " On").c_str(), false, "off", "on");
+            addFloat (eqAaxId (b, "type").c_str(), ("EQ " + std::to_string (b) + " Type").c_str(), (float) defType[i], 0.0f, (float) (kEqNumTypesAAX - 1));
+            addFloat (eqAaxId (b, "freq").c_str(), ("EQ " + std::to_string (b) + " Freq").c_str(), defFreq[i], 20.0f, 20000.0f);
+            addFloat (eqAaxId (b, "gain").c_str(), ("EQ " + std::to_string (b) + " Gain").c_str(), 0.0f, -18.0f, 18.0f);
+            addFloat (eqAaxId (b, "q").c_str(),    ("EQ " + std::to_string (b) + " Q").c_str(), defQ[i], 0.1f, 10.0f);
+        }
+    }
     // Normalize (measured on the actual rendered output).
     addBool  (kParamNormOn,     "Normalize",   false, "off", "on");
     addFloat (kParamNormTarget, "Norm Target", -16.0f, -60.0f, 0.0f);

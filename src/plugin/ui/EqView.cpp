@@ -1,5 +1,4 @@
 #include "plugin/ui/EqView.h"
-#include "plugin/ParameterState.h"
 #include "dsp/EqCoefficients.h"
 
 #include <cmath>
@@ -27,7 +26,7 @@ double bandDbAt (int type, float freq, float gain, float q, double f)
 const char* const kTypeNames[] = { "Bell", "Low Shelf", "High Shelf", "High Pass", "Low Pass", "Notch" };
 } // namespace
 
-EqView::EqView (juce::AudioProcessorValueTreeState& apvts) : apvts_ (apvts)
+EqView::EqView (Access access) : access_ (std::move (access))
 {
     auto setupKnob = [this] (juce::Slider& k, juce::Label& l, const juce::String& name)
     {
@@ -58,7 +57,7 @@ EqView::EqView (juce::AudioProcessorValueTreeState& apvts) : apvts_ (apvts)
     gainK_.onValueChange = [this] { setReal (sel_, "Gain", (float) gainK_.getValue()); repaint(); };
     qK_.onValueChange    = [this] { setReal (sel_, "Q",    (float) qK_.getValue());    repaint(); };
 
-    for (int t = 0; t < kEqNumTypes; ++t) typeBox_.addItem (kTypeNames[t], t + 1);
+    for (int t = 0; t < kEqViewNumTypes; ++t) typeBox_.addItem (kTypeNames[t], t + 1);
     typeBox_.setTooltip ("Filter type for the selected band.");
     addAndMakeVisible (typeBox_);
     typeBox_.onChange = [this]
@@ -84,26 +83,18 @@ EqView::EqView (juce::AudioProcessorValueTreeState& apvts) : apvts_ (apvts)
     selectBand (0);
 }
 
-juce::RangedAudioParameter* EqView::param (int band, const char* field) const
-{
-    return apvts_.getParameter (ParameterState::eqId (band + 1, field));
-}
 float EqView::realVal (int band, const char* field) const
 {
-    if (auto* rp = apvts_.getRawParameterValue (ParameterState::eqId (band + 1, field))) return rp->load();
-    return 0.0f;
+    return access_.getReal ? access_.getReal (band, field) : 0.0f;
 }
 void EqView::setReal (int band, const char* field, float v)
 {
-    if (auto* p = param (band, field)) p->setValueNotifyingHost (p->convertTo0to1 (v));
+    if (access_.setReal) access_.setReal (band, field, v);
 }
 bool EqView::bandOn (int band) const   { return realVal (band, "On") > 0.5f; }
-void EqView::setBandOn (int band, bool on)
-{
-    if (auto* p = param (band, "On")) p->setValueNotifyingHost (on ? 1.0f : 0.0f);
-}
+void EqView::setBandOn (int band, bool on) { setReal (band, "On", on ? 1.0f : 0.0f); }
 int  EqView::bandType (int band) const { return (int) std::lround (realVal (band, "Type")); }
-bool EqView::typeHasGain (int type)    { return type == EqBell || type == EqLowShelf || type == EqHighShelf; }
+bool EqView::typeHasGain (int type)    { return type == EvBell || type == EvLowShelf || type == EvHighShelf; }
 
 float EqView::freqToX (float f) const
 {

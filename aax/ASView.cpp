@@ -3,6 +3,7 @@
 #include "ASShared.h"
 #include "ASSpectralWindow.h"
 #include "ASWaveformWindow.h"
+#include "ASEqWindow.h"
 
 #include "BinaryData.h"
 
@@ -80,15 +81,19 @@ ASView::ASView (Bridge bridge) : bridge_ (std::move (bridge))
     addKnob (kParamXfade,    "Crossfade",    KPct,     purple, "How much neighbouring chunks overlap and blend. Higher = smoother joins.");
     addKnob (kParamSmooth,   "Smoothness",   KPct,     purple, "Enhance only: resynthesis window size. Higher = smoother, more diffuse; lower keeps more fine texture.");
     addKnob (kParamGain,     "Output",       KGain,    orange, "Output volume, in dB. Bypassed while Normalize is on.");
-    // Normalize + Hiss panels.
+    // Normalize + EQ panels.
     addKnob (kParamNormTarget, "Target",     KNormTgt, orange, "Loudness target the render is corrected to (dBFS peak or integrated LUFS).");
-    addKnob (kParamHissFreq,   "Freq",       KFreq,    purple, "De-hiss corner frequency (3-15 kHz). Lower = more aggressive HF cut.");
-    addKnob (kParamHissQ,      "Q",          KQ,       purple, "De-hiss filter Q (slope / resonance at the corner).");
 
-    addToggle (kParamEnhance, "Enhance", "PaulStretch resynthesis for when fragments won't blend into a clean bed. Enables Smoothness and the Hiss Filter.");
-    addToggle (kParamHissOn,  "Hiss Filter", "Enhance only: a low-pass that removes the HF hiss PaulStretch can add. Baked into the render.");
-    addToggle (kParamNormOn,  "Normalize", "Bake the output to a fixed loudness target, measured on the actual rendered length.");
+    addToggle (kParamEnhance, "Enhance", "PaulStretch resynthesis for when fragments won't blend into a clean bed. Enables Smoothness and the EQ.");
+    addToggle (kParamHissOn,  "EQ", "Enhance only: a 5-band parametric EQ on the room-tone bed (also tames PaulStretch hiss). Baked into the render.")
+        .btn.getProperties().set ("icon", (int) LNF::IcWave);
+    addToggle (kParamNormOn,  "Normalize", "Bake the output to a fixed loudness target, measured on the actual rendered length.")
+        .btn.getProperties().set ("icon", (int) LNF::IcSparkle);
     addToggle (kParamNormLufs, "LUFS", "LUFS = integrated loudness (EBU R128). Off = dBFS peak.");
+
+    eqEditBtn_.setTooltip ("Open the 5-band parametric EQ editor (graph + Freq/Gain/Q).");
+    eqEditBtn_.onClick = [this] { openEqWindow(); };
+    addAndMakeVisible (eqEditBtn_);
 
     // Classic / Experimental / Spectral mode group (mutually exclusive; drives the statistical +
     // spectral params). Classic/Experimental pick the selection engine; Spectral is the per-band mosaic.
@@ -114,17 +119,20 @@ ASView::ASView (Bridge bridge) : bridge_ (std::move (bridge))
     manualBtn_.onClick = [this] { bridge_.setNorm (kParamManual, 1.0); };
 
     regenBtn_.setButtonText ("Regenerate");
+    regenBtn_.getProperties().set ("icon", (int) LNF::IcRefresh);
     regenBtn_.setTooltip ("New random variation of the fill (same settings). Nudges the Seed so the next Render/Preview differs.");
     regenBtn_.onClick = [this] { bridge_.setNorm (kParamSeed, rng_.nextDouble()); };
     addAndMakeVisible (regenBtn_);
 
     bypassBtn_.setButtonText ("Bypass");
+    bypassBtn_.getProperties().set ("icon", (int) LNF::IcPower);
     bypassBtn_.setClickingTogglesState (true);
     bypassBtn_.setTooltip ("A/B: Preview/Render the original source instead of the room tone, to compare them.");
     bypassBtn_.onClick = [this] { bridge_.setNorm (kParamBypass, bypassBtn_.getToggleState() ? 1.0 : 0.0); };
     addAndMakeVisible (bypassBtn_);
 
     expandBtn_.setButtonText ("Expand");
+    expandBtn_.getProperties().set ("icon", (int) LNF::IcExpand);
     expandBtn_.setTooltip ("Open a large waveform view for precise manual room-tone selection.");
     expandBtn_.onClick = [this] { openWaveformWindow(); };
     addAndMakeVisible (expandBtn_);
@@ -174,6 +182,16 @@ void ASView::openWaveformWindow()
     else waveWin_->toFront (true);
 }
 
+void ASView::openEqWindow()
+{
+    if (eqWin_ == nullptr)
+    {
+        eqWin_ = std::make_unique<ASEqWindow> (bridge_.getNorm, bridge_.setNorm);
+        eqWin_->onClose = [this] { eqWin_.reset(); };
+    }
+    else eqWin_->toFront (true);
+}
+
 void ASView::timerCallback()
 {
     for (auto& k : knobs_)
@@ -216,16 +234,16 @@ void ASView::timerCallback()
     auto en = [] (juce::Component& c, bool on) { c.setEnabled (on); c.setAlpha (on ? 1.0f : 0.4f); };
     for (auto& k : knobs_)
     {
-        if (k->id == kParamSmooth)                             en (k->slider, enh);
-        if (k->id == kParamHissFreq || k->id == kParamHissQ)   en (k->slider, enh && hiss);
-        if (k->id == kParamGain)                               en (k->slider, ! norm);
-        if (k->id == kParamNormTarget)                         en (k->slider, norm);
+        if (k->id == kParamSmooth)     en (k->slider, enh);
+        if (k->id == kParamGain)       en (k->slider, ! norm);
+        if (k->id == kParamNormTarget) en (k->slider, norm);
     }
     for (auto& t : toggles_)
     {
         if (t->id == kParamHissOn)   en (t->btn, enh);
         if (t->id == kParamNormLufs) en (t->btn, norm);
     }
+    en (eqEditBtn_, enh && hiss); // EQ editor button live only when Enhance + EQ are on
 
     if (++tipTick_ >= 300) { tipTick_ = 0; tipIdx_ = (tipIdx_ + 1) % (int) tips_.size(); tipLbl_.setText (tips_[(std::size_t) tipIdx_], juce::dontSendNotification); }
 }
@@ -277,7 +295,7 @@ void ASView::paint (juce::Graphics& g)
     };
     card (normCard_, nullptr, {});
     const bool enh = bridge_.getNorm (kParamEnhance) > 0.5;
-    card (hissCard_, "HISS FILTER", enh ? LNF::coral() : LNF::muted());
+    card (hissCard_, "EQ", enh ? LNF::coral() : LNF::muted());
     card (tipCard_, "TIP", LNF::accent());
 
     // Header grouped background behind Auto|Manual.
@@ -439,13 +457,11 @@ void ASView::resized()
         knobs_[8]->slider.setBounds (nr); // Target
     }
     {
+        // EQ card: master enable + a button that opens the shared 5-band EQ editor window.
         auto hr = hissCard_.reduced (12, 0).withTrimmedTop (20);
-        findT (kParamHissOn).setBounds (hr.removeFromLeft (88).withSizeKeepingCentre (88, 24));
-        hr.removeFromLeft (8);
-        const int kw = hr.getWidth() / 2;
-        auto place = [] (Knob& k, juce::Rectangle<int> cell) { k.label.setBounds (cell.removeFromTop (12)); k.slider.setBounds (cell); };
-        place (*knobs_[9],  hr.removeFromLeft (kw));  // Hiss Freq
-        place (*knobs_[10], hr);                      // Hiss Q
+        findT (kParamHissOn).setBounds (hr.removeFromLeft (96).withSizeKeepingCentre (96, 26));
+        hr.removeFromLeft (10);
+        eqEditBtn_.setBounds (hr.removeFromLeft (juce::jmin (140, hr.getWidth())).withSizeKeepingCentre (juce::jmin (140, hr.getWidth()), 26));
     }
     r.removeFromTop (12);
 

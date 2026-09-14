@@ -14,6 +14,7 @@
 #include "dsp/Loudness.h"
 #include "dsp/SpectralBands.h"
 #include "dsp/AutoBands.h"
+#include "dsp/EqCoefficients.h"
 
 #include <juce_audio_basics/juce_audio_basics.h>
 
@@ -225,7 +226,7 @@ std::shared_ptr<FillResult> renderImpl (const tonefill::engine::model::AmbienceM
 // and sum. Mirrors the ARA path. Reuses analyseImpl per band (sh=nullptr so it never touches the UI).
 std::shared_ptr<FillResult>
 renderSpectralImpl (const tonefill::engine::model::AmbienceModelPtr& model,
-                    const juce::AudioBuffer<float>& raw, const RenderParams& p)
+                    const juce::AudioBuffer<float>& raw, const RenderParams& p, ASShared* sh)
 {
     if (model == nullptr) return nullptr;
 
@@ -287,6 +288,12 @@ renderSpectralImpl (const tonefill::engine::model::AmbienceModelPtr& model,
     tonefill::engine::synthesis::AmbienceRenderer renderer;
     std::vector<float> accMono ((std::size_t) outN, 0.0f);
 
+    // UI waveform overlay: the UNION of every band's clean selection (Auto mode), so the highlight
+    // reflects per-band harvesting across the whole file, not just one broadband-clean stretch.
+    const int  uniBins = 600;
+    const int  uniPer  = juce::jmax (1, srcN / uniBins);
+    std::vector<char> waveUnion ((std::size_t) uniBins, 0);
+
     for (std::size_t bi = 0; bi < bands.size(); ++bi)
     {
         const auto& band = bands[bi];
@@ -300,6 +307,13 @@ renderSpectralImpl (const tonefill::engine::model::AmbienceModelPtr& model,
         std::copy (band.begin(), band.end(), bandBuf.getWritePointer (0));
         auto bandModel = analyseImpl (p, bandBuf, nullptr); // no UI publish
         if (bandModel == nullptr) continue;
+
+        for (const auto& cr : bandModel->cleanRanges)
+        {
+            const int b0 = juce::jlimit (0, uniBins - 1, cr.first / uniPer);
+            const int b1 = juce::jlimit (0, uniBins - 1, (cr.second - 1) / uniPer);
+            for (int k = b0; k <= b1; ++k) waveUnion[(std::size_t) k] = 1;
+        }
 
         tonefill::engine::model::RenderSettings s;
         s.mode        = tonefill::engine::model::Mode::Ambience;
@@ -345,6 +359,12 @@ renderSpectralImpl (const tonefill::engine::model::AmbienceModelPtr& model,
             const float g = std::pow (10.0f, gainDb / 20.0f);
             if (std::fabs (g - 1.0f) > 1.0e-4f) for (auto& c : chans) for (auto& v : c) v *= g;
         }
+    }
+
+    if (sh != nullptr && ! (p.manual && ! p.manualRanges.empty()))
+    {
+        const juce::SpinLock::ScopedLockType l (sh->lock);
+        if ((int) sh->clean.size() == uniBins) sh->clean = std::move (waveUnion); // align with the peak bins
     }
 
     auto fr = std::make_shared<FillResult>();
@@ -421,7 +441,7 @@ public:
             }
             if (mModel != nullptr && job.rSig != mDoneRSig)
             {
-                auto fr = job.spectral ? renderSpectralImpl (mModel, *raw, job) : renderImpl (mModel, job);
+                auto fr = job.spectral ? renderSpectralImpl (mModel, *raw, job, mShared) : renderImpl (mModel, job);
                 if (fr)
                 {
                     const juce::ScopedLock l (mPubLock);
@@ -478,7 +498,7 @@ AAX_Result ToneFillAS_HostProcessor::PreRender (int32_t iAudioInCount, int32_t /
     mChannels   = juce::jmax (1, iAudioInCount);
     mSampleRate = sampleRate();
     mGenPos     = 0;
-    mHiss.clear(); mHissLastFreq = -1.0f; mHissLastQ = -1.0f;
+    mEq.clear(); mEqCache = {};
 
     if (mWorker == nullptr)
     {
@@ -653,20 +673,30 @@ AAX_Result ToneFillAS_HostProcessor::RenderAudio (const float* const inAudioIns[
     }
     if (fillLen > 0) mGenPos += n;
 
-    // Hiss filter applied LIVE, stateful across the pass (identical to the ARA processBlock).
+    // Enhance-only PARAMETRIC EQ applied LIVE, stateful across the pass (mirrors the ARA processBlock).
+    // Master = kParamHissOn; 5 flexible bands. Coeffs rebuilt only when a band changes.
     if (fillLen > 0 && pr.enhance && readNorm (kParamHissOn) > 0.5)
     {
-        if ((int) mHiss.size() < ci) mHiss.resize ((std::size_t) ci);
-        const float freq = (float) readReal (kParamHissFreq, 3000.0, 15000.0);
-        const float q    = (float) readReal (kParamHissQ, 0.3, 2.0);
-        if (std::abs (freq - mHissLastFreq) > 0.5f || std::abs (q - mHissLastQ) > 1.0e-3f)
+        if ((int) mEq.size() < ci) mEq.resize ((std::size_t) ci);
+        for (int b = 0; b < kEqBands; ++b)
         {
-            const auto co = juce::IIRCoefficients::makeLowPass (mSampleRate, freq, q);
-            for (auto& f : mHiss) f.setCoefficients (co);
-            mHissLastFreq = freq; mHissLastQ = q;
+            const bool  on   = readNorm (eqAaxId (b + 1, "on").c_str()) > 0.5;
+            const int   type = (int) std::lround (readReal (eqAaxId (b + 1, "type").c_str(), 0.0, (double) (kEqNumTypesAAX - 1)));
+            const float freq = (float) readReal (eqAaxId (b + 1, "freq").c_str(), 20.0, 20000.0);
+            const float gain = (float) readReal (eqAaxId (b + 1, "gain").c_str(), -18.0, 18.0);
+            const float q    = (float) readReal (eqAaxId (b + 1, "q").c_str(), 0.1, 10.0);
+            auto& cache = mEqCache[(std::size_t) b];
+            if (cache.on != on || cache.type != type || std::abs (cache.freq - freq) > 0.5f
+                || std::abs (cache.gain - gain) > 1.0e-3f || std::abs (cache.q - q) > 1.0e-3f)
+            {
+                const auto co = tonefill::dsp::makeEqCoefficients (mSampleRate, type, freq, gain, q);
+                for (auto& chain : mEq) chain[(std::size_t) b].setCoefficients (co);
+                cache = { on, type, freq, gain, q };
+            }
+            if (! on) continue;
+            for (int c = 0; c < ci; ++c)
+                if (inAudioOuts[c]) mEq[(std::size_t) c][(std::size_t) b].processSamples (inAudioOuts[c], n);
         }
-        for (int c = 0; c < ci; ++c)
-            if (inAudioOuts[c]) mHiss[(std::size_t) c].processSamples (inAudioOuts[c], n);
     }
     return AAX_SUCCESS;
 }

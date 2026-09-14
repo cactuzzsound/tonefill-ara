@@ -1,22 +1,35 @@
 #pragma once
 
-#include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 
 #include "plugin/ui/ToneFillLookAndFeel.h"
-#include "plugin/SessionState.h"
 
 #include <array>
+#include <functional>
 
 namespace tonefill::plugin::ui
 {
+// The number of EQ bands (kept local so this widget has no dependency on plugin/AAX state headers).
+static constexpr int kEqViewBands = 5;
+
+// Filter-type order MUST match SessionState::EqType / dsp::makeEqCoefficients / the AAX param order.
+enum EqViewType { EvBell = 0, EvLowShelf, EvHighShelf, EvHighPass, EvLowPass, EvNotch, kEqViewNumTypes };
+
 // Enhance-only parametric EQ editor: an interactive frequency-response graph (drag band nodes) plus
-// Type / Freq / Gain / Q controls for the selected band. Reads and writes the APVTS EQ parameters
-// directly; MainView calls refresh() from its timer to keep the controls in sync.
+// Type / Freq / Gain / Q controls for the selected band. Backend-agnostic: it reads/writes bands via
+// an Access adapter (APVTS in the VST, the AAX parameter bridge in AudioSuite). The owner calls
+// refresh() periodically to keep the controls in sync. Field tokens are "On"/"Type"/"Freq"/"Gain"/"Q";
+// band is 0-based; getReal/setReal use REAL values (On/Type as 0/1 and the type index).
 class EqView : public juce::Component
 {
 public:
-    explicit EqView (juce::AudioProcessorValueTreeState& apvts);
+    struct Access
+    {
+        std::function<float (int band, const char* field)>            getReal;
+        std::function<void  (int band, const char* field, float val)> setReal;
+    };
+
+    explicit EqView (Access access);
 
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -29,8 +42,8 @@ public:
 
 private:
     using LNF = ToneFillLookAndFeel;
+    static constexpr int kEqBands = kEqViewBands;
 
-    juce::RangedAudioParameter* param (int band, const char* field) const;
     float realVal (int band, const char* field) const;
     void  setReal (int band, const char* field, float v);
     bool  bandOn  (int band) const;
@@ -47,7 +60,7 @@ private:
     void  selectBand (int b);
     void  syncSelectedControls();
 
-    juce::AudioProcessorValueTreeState& apvts_;
+    Access access_;
     int  sel_ = 0;
     bool dragging_ = false;
 

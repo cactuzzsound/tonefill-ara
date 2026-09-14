@@ -2,6 +2,8 @@
 
 #include "AAX.h" // AAX_CTypeID
 
+#include <string>
+
 // Native AAX AudioSuite (HostProcessor) build of ToneFill. Separate plugin client from the JUCE
 // VST3/AU/ARA build; shares the same tonefill_engine. Vendor identity MUST match the other
 // formats (LostComzz precedent): "cactuzz sound" / 'Czsd'.
@@ -24,9 +26,16 @@ constexpr const char* kParamSmooth     = "smooth";   // Smoothness         0..1 
 constexpr const char* kParamGain       = "gain";     // Output             -24..+24 dB
 constexpr const char* kParamEnhance    = "enhance";  // Enhance (PaulStretch) on/off
 constexpr const char* kParamExperim    = "experi";   // Experimental (statistical) selection on/off
-constexpr const char* kParamHissOn     = "hisson";   // Hiss Filter on/off (Enhance only)
-constexpr const char* kParamHissFreq   = "hissfrq";  // Hiss corner        3000..15000 Hz
-constexpr const char* kParamHissQ      = "hissq";    // Hiss Q             0.3..2.0
+constexpr const char* kParamHissOn     = "hisson";   // Parametric EQ MASTER on/off (Enhance only)
+constexpr const char* kParamHissFreq   = "hissfrq";  // (legacy, unused)
+constexpr const char* kParamHissQ      = "hissq";    // (legacy, unused)
+
+// Enhance-only parametric EQ: 5 fully flexible bands. Ids generated per band (1..5) + field.
+// Type order matches SessionState::EqType / dsp::makeEqCoefficients: 0 Bell,1 LowShelf,2 HighShelf,
+// 3 HighPass,4 LowPass,5 Notch.
+constexpr int kEqBandsAAX    = 5;
+constexpr int kEqNumTypesAAX = 6;
+inline std::string eqAaxId (int band, const char* field) { return "eq" + std::to_string (band) + field; }
 constexpr const char* kParamNormOn     = "normon";   // Normalize on/off
 constexpr const char* kParamNormTarget = "normtgt";  // Normalize target   -60..0 (dBFS or LUFS)
 constexpr const char* kParamNormLufs   = "normluf";  // 1 = LUFS, 0 = dBFS (peak)

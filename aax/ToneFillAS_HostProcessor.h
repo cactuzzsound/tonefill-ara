@@ -4,6 +4,7 @@
 
 #include <juce_audio_basics/juce_audio_basics.h>
 
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -44,7 +45,10 @@ private:
     std::shared_ptr<const juce::AudioBuffer<float>> mRaw;
     std::string mRawSig, mLastSubmitSig, mPreviewSig;
 
-    // Hiss filter applied LIVE on the tiled output (stateful across the pass), like ARA.
-    std::vector<juce::IIRFilter> mHiss;
-    float mHissLastFreq = -1.0f, mHissLastQ = -1.0f;
+    // Enhance-only parametric EQ: per-channel chain of 5 biquads, applied LIVE on the tiled output
+    // (stateful across the pass), like the ARA path. Coeffs rebuilt only when a band changes.
+    static constexpr int kEqBands = 5;
+    std::vector<std::array<juce::IIRFilter, kEqBands>> mEq; // [channel][band]
+    struct EqCache { bool on = false; int type = -1; float freq = -1.0f, gain = -999.0f, q = -1.0f; };
+    std::array<EqCache, kEqBands> mEqCache {};
 };
