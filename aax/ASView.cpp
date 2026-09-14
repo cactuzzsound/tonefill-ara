@@ -246,6 +246,11 @@ void ASView::timerCallback()
     en (eqEditBtn_, enh && hiss); // EQ editor button live only when Enhance + EQ are on
 
     if (++tipTick_ >= 300) { tipTick_ = 0; tipIdx_ = (tipIdx_ + 1) % (int) tips_.size(); tipLbl_.setText (tips_[(std::size_t) tipIdx_], juce::dontSendNotification); }
+
+    // Refresh the waveform / status / "recomputing" area every tick (the VST's MainView does the same).
+    // Without this the main window only repainted on incidental events, so the analysis overlay showed
+    // up much later than in the VST (and later than the freshly-opened Expand window).
+    repaint();
 }
 
 void ASView::paint (juce::Graphics& g)
