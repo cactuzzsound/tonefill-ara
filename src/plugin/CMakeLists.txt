@@ -16,6 +16,7 @@ set(PLUGIN_SOURCES
     PluginEditor.cpp
     ParameterState.cpp
     ui/MainView.cpp
+    ui/EqView.cpp
     ui/WaveformWindow.cpp
     ui/SpectralEditor.cpp
     ui/SpectralEditorWindow.cpp

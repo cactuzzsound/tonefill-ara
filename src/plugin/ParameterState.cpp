@@ -66,6 +66,32 @@ APVTS::ParameterLayout ParameterState::createLayout()
     layout.add (std::make_unique<AudioParameterFloat> (ParameterID { IDs::hissQ, 1 }, "Hiss Q",
         NormalisableRange<float> (0.3f, 2.0f, 0.01f), 0.707f));
 
+    // Enhance-only parametric EQ: 5 fully flexible bands (master enable = hissFilter above).
+    // Type order MUST match SessionState::EqType.
+    {
+        const juce::StringArray eqTypes { "Bell", "Low Shelf", "High Shelf", "High Pass", "Low Pass", "Notch" };
+        const int   defType[5] = { 3, 1, 0, 0, 4 };
+        const float defFreq[5] = { 40.0f, 150.0f, 1000.0f, 5000.0f, 9000.0f };
+        const float defQ   [5] = { 0.707f, 0.707f, 1.0f, 1.0f, 0.707f };
+        NormalisableRange<float> freqRange (20.0f, 20000.0f, 1.0f, 0.25f);
+        NormalisableRange<float> qRange    (0.1f, 10.0f, 0.001f, 0.3f);
+        for (int b = 1; b <= 5; ++b)
+        {
+            const int i = b - 1;
+            layout.add (std::make_unique<juce::AudioParameterBool> (
+                ParameterID { eqId (b, "On"), 1 }, "EQ " + juce::String (b) + " On", false));
+            layout.add (std::make_unique<AudioParameterChoice> (
+                ParameterID { eqId (b, "Type"), 1 }, "EQ " + juce::String (b) + " Type", eqTypes, defType[i]));
+            layout.add (std::make_unique<AudioParameterFloat> (
+                ParameterID { eqId (b, "Freq"), 1 }, "EQ " + juce::String (b) + " Freq", freqRange, defFreq[i]));
+            layout.add (std::make_unique<AudioParameterFloat> (
+                ParameterID { eqId (b, "Gain"), 1 }, "EQ " + juce::String (b) + " Gain",
+                NormalisableRange<float> (-18.0f, 18.0f, 0.1f), 0.0f));
+            layout.add (std::make_unique<AudioParameterFloat> (
+                ParameterID { eqId (b, "Q"), 1 }, "EQ " + juce::String (b) + " Q", qRange, defQ[i]));
+        }
+    }
+
     return layout;
 }
 } // namespace tonefill::plugin

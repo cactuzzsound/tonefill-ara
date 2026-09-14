@@ -1,4 +1,5 @@
 #include "plugin/ui/MainView.h"
+#include "plugin/ui/EqView.h"
 #include "plugin/ui/WaveformWindow.h"
 #include "plugin/ui/SpectralEditorWindow.h"
 #include "plugin/PluginProcessor.h"
@@ -84,7 +85,7 @@ MainView::MainView (PluginProcessor& processor) : processor_ (processor)
     leA_ = std::make_unique<SA> (apvts, IDs::renderLength, length_.slider);
 
     // Learn-source mode: Auto vs Manual (one segmented section).
-    for (auto* b : { &autoBtn_, &manualBtn_ }) { b->setClickingTogglesState (true); b->setRadioGroupId (200); addAndMakeVisible (*b); }
+    for (auto* b : { &autoBtn_, &manualBtn_ }) { b->setClickingTogglesState (true); b->setRadioGroupId (200); b->getProperties().set ("primary", true); addAndMakeVisible (*b); }
     autoBtn_.setToggleState (true, juce::dontSendNotification);
     autoBtn_.setTooltip ("Plugin finds clean room tone automatically.");
     manualBtn_.setTooltip ("You pick the room-tone regions yourself: drag on the waveform below to add, click a region to remove.");
@@ -125,33 +126,50 @@ MainView::MainView (PluginProcessor& processor) : processor_ (processor)
     advBtn_.onClick = [this] { if (advBtn_.getToggleState()) openSpectralWindow(); };
 
     expandBtn_.setTooltip ("Open a large waveform view with a timecode ruler, zoom and scroll for precise selecting.");
+    expandBtn_.getProperties().set ("icon", (int) LNF::IcExpand);
     expandBtn_.onClick = [this] { openWaveformWindow(); };
     addAndMakeVisible (expandBtn_);
 
     regenBtn_.setTooltip ("New random variation of the fill (same settings).");
+    regenBtn_.getProperties().set ("icon", (int) LNF::IcRefresh);
     regenBtn_.onClick = [this] { auto& ss = processor_.sessionState(); ss.seed.fetch_add (0x9E3779B97F4A7C15ULL); ss.generation.fetch_add (1); };
     addAndMakeVisible (regenBtn_);
     exportBtn_.getProperties().set ("accent", true);
+    exportBtn_.getProperties().set ("icon", (int) LNF::IcDownload);
     exportBtn_.setTooltip ("Write the fill to a WAV file. Length is set by Export Len.");
     exportBtn_.onClick = [this] { exportWav(); };
     addAndMakeVisible (exportBtn_);
     bypassBtn_.setClickingTogglesState (true);
+    bypassBtn_.getProperties().set ("icon", (int) LNF::IcPower);
     bypassBtn_.setTooltip ("Monitor the original source instead of the room tone, to A/B them. Does not change what Export writes.");
     addAndMakeVisible (bypassBtn_);
     byA_ = std::make_unique<BA> (apvts, IDs::bypass, bypassBtn_);
 
     normBtn_.setClickingTogglesState (true);
+    normBtn_.getProperties().set ("icon", (int) LNF::IcSparkle);
     normBtn_.setTooltip ("Bake the output to a fixed loudness target. When on, Output is bypassed.");
     addAndMakeVisible (normBtn_);
     neA_ = std::make_unique<BA> (apvts, IDs::normEnabled, normBtn_);
 
+    // Hidden parameter-bound backing; presented as a −/value/+ stepper.
     normTarget_.setSliderStyle (juce::Slider::IncDecButtons);
-    normTarget_.setTextBoxStyle (juce::Slider::TextBoxLeft, false, 64, 24);
     normTarget_.setRange (-60.0, 0.0, 0.1);
-    normTarget_.setColour (juce::Slider::textBoxTextColourId, LNF::navy());
     normTarget_.setTooltip ("Target level to normalize to. Peak dBFS, or integrated LUFS.");
-    addAndMakeVisible (normTarget_);
+    addChildComponent (normTarget_);
     ntA_ = std::make_unique<SA> (apvts, IDs::normTarget, normTarget_);
+
+    normValueLbl_.setJustificationType (juce::Justification::centred);
+    normValueLbl_.setFont (juce::Font (13.5f, juce::Font::bold));
+    normValueLbl_.setColour (juce::Label::textColourId, LNF::navy());
+    normValueLbl_.setTooltip ("Target level to normalize to. Peak dBFS, or integrated LUFS.");
+    addAndMakeVisible (normValueLbl_);
+    for (auto* b : { &normMinus_, &normPlus_ }) addAndMakeVisible (*b);
+    normMinus_.getProperties().set ("icon", (int) LNF::IcMinus);
+    normPlus_.getProperties().set ("icon", (int) LNF::IcPlus);
+    normMinus_.setTooltip ("Lower the target by 0.5.");
+    normPlus_.setTooltip ("Raise the target by 0.5.");
+    normMinus_.onClick = [this] { normTarget_.setValue (normTarget_.getValue() - 0.5, juce::sendNotificationSync); };
+    normPlus_.onClick  = [this] { normTarget_.setValue (normTarget_.getValue() + 0.5, juce::sendNotificationSync); };
 
     normUnit_.addItem ("dBFS", 1); normUnit_.addItem ("LUFS", 2);
     normUnit_.setTooltip ("dBFS = normalize the peak. LUFS = normalize integrated loudness (EBU R128).");
@@ -165,15 +183,14 @@ MainView::MainView (PluginProcessor& processor) : processor_ (processor)
 
     // Enhance-only HISS FILTER (separate panel under Texture); the switch is active only in Enhance.
     hissBtn_.setClickingTogglesState (true);
-    hissBtn_.setTooltip ("Enhance only: a live low-pass that removes the HF hiss PaulStretch can add. "
-                         "Freq sets the corner (3-15 kHz), Q the slope.");
+    hissBtn_.getProperties().set ("icon", (int) LNF::IcWave);
+    hissBtn_.setTooltip ("Enhance only: a 5-band parametric EQ on the room-tone bed (also tames the HF hiss "
+                         "PaulStretch can add). Toggle on to reveal the EQ editor below.");
     addAndMakeVisible (hissBtn_);
     hbA_ = std::make_unique<BA> (apvts, IDs::hissFilter, hissBtn_);
-    initKnob (*this, hissFreq_, "Freq", "De-hiss corner frequency (3-15 kHz). Lower = more aggressive HF cut.", LNF::purple());
-    hissFreq_.slider.setTextValueSuffix (" Hz");
-    initKnob (*this, hissQ_, "Q", "De-hiss filter Q (slope / resonance at the corner).", LNF::purple());
-    hfrA_ = std::make_unique<SA> (apvts, IDs::hissFreq, hissFreq_.slider);
-    hqA_  = std::make_unique<SA> (apvts, IDs::hissQ,    hissQ_.slider);
+    // The EQ editor (graph + Freq/Gain/Q controls) expands under the action bar when EQ is on.
+    eqView_ = std::make_unique<EqView> (apvts);
+    addChildComponent (*eqView_);
 
     tips_ = {
         "Push Voice Reject up to strip breaths and mouth noise from the bed.",
@@ -305,14 +322,15 @@ void MainView::paint (juce::Graphics& g)
     for (int i = 0; i < 3; ++i)
     {
         const auto cf = groupCard_[(std::size_t) i].toFloat();
-        g.setColour (LNF::panel());     g.fillRoundedRectangle (cf, 12.0f);
-        g.setColour (LNF::line());      g.drawRoundedRectangle (cf, 12.0f, 1.0f);
+        LNF::softShadow (g, cf, 16.0f);
+        g.setColour (LNF::panel());     g.fillRoundedRectangle (cf, 16.0f);
+        g.setColour (LNF::lineSoft());  g.drawRoundedRectangle (cf, 16.0f, 1.0f);
         const float hy = cf.getY() + 18.0f;
         g.setFont (juce::Font (11.0f));
         const int labW = juce::Font (11.0f).getStringWidth (titles[i]);
         const float total = (float) labW + 24.0f;
         const float lx = cf.getCentreX() - total * 0.5f;
-        drawGroupIcon (g, { lx, hy - 7.0f, 14.0f, 14.0f }, icons[i], LNF::purple());
+        drawGroupIcon (g, { lx, hy - 7.0f, 14.0f, 14.0f }, icons[i], LNF::navy().withAlpha (0.7f));
         g.setColour (LNF::label());
         g.drawText (titles[i], (int) (lx + 20.0f), (int) (hy - 7.0f), labW + 10, 14, juce::Justification::centredLeft, false);
         g.setColour (LNF::lineSoft());
@@ -322,17 +340,18 @@ void MainView::paint (juce::Graphics& g)
     // Knob value pills.
     for (const auto& pill : valuePills_)
     {
-        g.setColour (LNF::panel());
-        g.fillRoundedRectangle (pill.toFloat(), 6.0f);
-        g.setColour (LNF::line());
-        g.drawRoundedRectangle (pill.toFloat(), 6.0f, 1.0f);
+        g.setColour (LNF::panelHi());
+        g.fillRoundedRectangle (pill.toFloat(), 7.0f);
+        g.setColour (LNF::lineSoft());
+        g.drawRoundedRectangle (pill.toFloat(), 7.0f, 1.0f);
     }
 
     // Vertical output meter.
     {
         const auto mf = meterArea_.toFloat();
-        g.setColour (LNF::panel());  g.fillRoundedRectangle (mf, 12.0f);
-        g.setColour (LNF::line());   g.drawRoundedRectangle (mf, 12.0f, 1.0f);
+        LNF::softShadow (g, mf, 16.0f);
+        g.setColour (LNF::panel());     g.fillRoundedRectangle (mf, 16.0f);
+        g.setColour (LNF::lineSoft());  g.drawRoundedRectangle (mf, 16.0f, 1.0f);
         g.setColour (LNF::label());
         g.setFont (juce::Font (10.0f));
         g.drawText ("OUTPUT", meterArea_.removeFromTop (0).withY (meterArea_.getY() + 8).withHeight (12).withX (meterArea_.getX()).withWidth (meterArea_.getWidth()),
@@ -351,7 +370,7 @@ void MainView::paint (juce::Graphics& g)
                 const float frac = (float) (segs - 1 - sIdx) / (float) (segs - 1);
                 const float by = barsArea.getY() + sIdx * (sh + 2.0f);
                 const bool lit = frac <= lvl;
-                juce::Colour col = frac > 0.82f ? LNF::coral() : frac > 0.6f ? LNF::purple() : navy.withAlpha (0.85f);
+                juce::Colour col = frac > 0.85f ? LNF::accent() : LNF::purple(); // clip = orange, else Cool Sky
                 g.setColour (lit ? col : LNF::lineSoft());
                 g.fillRoundedRectangle (bx, by, bw, sh, 2.0f);
             }
@@ -362,41 +381,34 @@ void MainView::paint (juce::Graphics& g)
                     juce::Justification::centred, false);
     }
 
-    // Normalize card background.
+    // Action bar: Normalize + LUFS stepper on the left, Hiss / Bypass / Regenerate / Export on the
+    // right. Grows a line when the Hiss filter reveals its Freq / Q knobs.
     {
-        g.setColour (LNF::panel());  g.fillRoundedRectangle (normCard_.toFloat(), 12.0f);
-        g.setColour (LNF::line());   g.drawRoundedRectangle (normCard_.toFloat(), 12.0f, 1.0f);
+        LNF::softShadow (g, actionCard_.toFloat(), 16.0f);
+        g.setColour (LNF::panel());     g.fillRoundedRectangle (actionCard_.toFloat(), 16.0f);
+        g.setColour (LNF::lineSoft());  g.drawRoundedRectangle (actionCard_.toFloat(), 16.0f, 1.0f);
+        // Value pill behind the −/value/+ stepper.
+        const auto vp = normValueLbl_.getBounds().toFloat();
+        g.setColour (LNF::panelHi());   g.fillRoundedRectangle (vp, 8.0f);
+        g.setColour (LNF::lineSoft());  g.drawRoundedRectangle (vp, 8.0f, 1.0f);
     }
 
-    // Hiss filter card (separate panel under Texture). Title dims when Enhance is off.
+    // Tip card + bulb glyph.
     {
-        const bool enh = processor_.parameters().apvts.getRawParameterValue (IDs::paulStretch)->load() > 0.5f;
-        g.setColour (LNF::panel());  g.fillRoundedRectangle (hissCard_.toFloat(), 12.0f);
-        g.setColour (LNF::line());   g.drawRoundedRectangle (hissCard_.toFloat(), 12.0f, 1.0f);
-        g.setColour (enh ? LNF::coral() : LNF::muted());
-        g.setFont (juce::Font (11.0f, juce::Font::bold));
-        g.drawText ("HISS FILTER", hissCard_.getX() + 14, hissCard_.getY() + 6, 140, 12, juce::Justification::centredLeft, false);
-        if (! enh)
-        {
-            g.setColour (LNF::muted());
-            g.setFont (juce::Font (10.0f));
-            g.drawText ("Enhance only", hissCard_.getRight() - 96, hissCard_.getY() + 6, 82, 12, juce::Justification::centredRight, false);
-        }
-    }
-
-    // Tip card.
-    {
-        g.setColour (LNF::panel());  g.fillRoundedRectangle (tipCard_.toFloat(), 12.0f);
-        g.setColour (LNF::line());   g.drawRoundedRectangle (tipCard_.toFloat(), 12.0f, 1.0f);
+        LNF::softShadow (g, tipCard_.toFloat(), 16.0f);
+        g.setColour (LNF::panel());     g.fillRoundedRectangle (tipCard_.toFloat(), 16.0f);
+        g.setColour (LNF::lineSoft());  g.drawRoundedRectangle (tipCard_.toFloat(), 16.0f, 1.0f);
+        LNF::drawIcon (g, { (float) tipCard_.getX() + 14.0f, (float) tipCard_.getCentreY() - 8.0f, 16.0f, 16.0f }, LNF::IcBulb, LNF::accent());
         g.setColour (LNF::accent());
         g.setFont (juce::Font (11.0f, juce::Font::bold));
-        g.drawText ("TIP", tipCard_.getX() + 14, tipCard_.getY() + 8, 40, 14, juce::Justification::centredLeft, false);
+        g.drawText ("TIP", tipCard_.getX() + 36, tipCard_.getY(), 40, tipCard_.getHeight(), juce::Justification::centredLeft, false);
     }
 
     // Bottom panel: waveform + data + status.
     {
-        g.setColour (LNF::panel());  g.fillRoundedRectangle (bottomCard_.toFloat(), 12.0f);
-        g.setColour (LNF::line());   g.drawRoundedRectangle (bottomCard_.toFloat(), 12.0f, 1.0f);
+        LNF::softShadow (g, bottomCard_.toFloat(), 16.0f);
+        g.setColour (LNF::panel());     g.fillRoundedRectangle (bottomCard_.toFloat(), 16.0f);
+        g.setColour (LNF::lineSoft());  g.drawRoundedRectangle (bottomCard_.toFloat(), 16.0f, 1.0f);
     }
 
     // Waveform.
@@ -540,53 +552,52 @@ void MainView::resized()
     }
     r.removeFromTop (12);
 
-    // Normalize + Hiss row: Normalize ends flush with the Structure card's right edge; the Hiss
-    // panel starts flush with the Texture card's left edge (the gap between them separates them).
-    auto normRow = r.removeFromTop (60);
-    normCard_ = normRow.withRight (groupCard_[1].getRight());
-    hissCard_ = normRow.withLeft (groupCard_[2].getX());
+    // Action bar (one full-width card): Normalize + −/value/+ stepper + unit + "now …" readout on the
+    // left; Hiss / Bypass / Regenerate / Export on the right. When the Hiss filter is on (Enhance) the
+    // card grows a line and reveals its Freq / Q knobs beneath the right cluster.
+    auto& apvts = processor_.parameters().apvts;
+    const bool hissEnh  = apvts.getRawParameterValue (IDs::paulStretch)->load() > 0.5f;
+    const bool hissShow = hissEnh && apvts.getRawParameterValue (IDs::hissFilter)->load() > 0.5f;
+    const int  hissExtra = hissShow ? 196 : 0;
+    auto actionRow = r.removeFromTop (60 + hissExtra);
+    actionCard_ = actionRow;
+    auto bar = actionRow.withHeight (60).reduced (14, 0);
     {
-        auto nr = normCard_.reduced (14, 0);
-        normBtn_.setBounds (nr.removeFromLeft (100).withSizeKeepingCentre (100, 28));
-        nr.removeFromLeft (10);
-        normTarget_.setBounds (nr.removeFromLeft (124).withSizeKeepingCentre (124, 28));
-        nr.removeFromLeft (10);
-        normUnit_.setBounds (nr.removeFromLeft (72).withSizeKeepingCentre (72, 28));
-        nr.removeFromLeft (10);
-        normReadout_.setBounds (nr.withSizeKeepingCentre (nr.getWidth(), 24)); // "now" next to the unit picker
+        normBtn_.setBounds (bar.removeFromLeft (128).withSizeKeepingCentre (128, 34));
+        bar.removeFromLeft (12);
+        normMinus_.setBounds (bar.removeFromLeft (34).withSizeKeepingCentre (34, 34));
+        bar.removeFromLeft (6);
+        normValueLbl_.setBounds (bar.removeFromLeft (104).withSizeKeepingCentre (104, 30));
+        bar.removeFromLeft (6);
+        normPlus_.setBounds (bar.removeFromLeft (34).withSizeKeepingCentre (34, 34));
+        bar.removeFromLeft (12);
+        normUnit_.setBounds (bar.removeFromLeft (78).withSizeKeepingCentre (78, 30));
+        bar.removeFromLeft (10);
+        // Right cluster (laid out from the right edge inward).
+        exportBtn_.setBounds (bar.removeFromRight (150).withSizeKeepingCentre (150, 40));
+        bar.removeFromRight (10);
+        regenBtn_.setBounds (bar.removeFromRight (140).withSizeKeepingCentre (140, 40));
+        bar.removeFromRight (10);
+        bypassBtn_.setBounds (bar.removeFromRight (116).withSizeKeepingCentre (116, 40));
+        bar.removeFromRight (10);
+        hissBtn_.setBounds (bar.removeFromRight (128).withSizeKeepingCentre (128, 34));
+        bar.removeFromRight (12);
+        normReadout_.setBounds (bar.withSizeKeepingCentre (bar.getWidth(), 24)); // "now …" fills the middle
     }
-    {
-        auto hr = hissCard_.reduced (12, 6).withTrimmedTop (12); // leave room for the HISS FILTER title
-        hissBtn_.setBounds (hr.removeFromLeft (96).withSizeKeepingCentre (96, 26));
-        hr.removeFromLeft (8);
-        auto placeMini = [] (Knob& k, juce::Rectangle<int> cell)
-        {
-            k.label.setBounds (cell.removeFromTop (11));
-            k.slider.setBounds (cell);
-        };
-        const int kw = hr.getWidth() / 2;
-        placeMini (hissFreq_, hr.removeFromLeft (kw));
-        placeMini (hissQ_, hr);
-    }
+    if (hissShow && eqView_ != nullptr)
+        eqView_->setBounds (actionRow.withTrimmedTop (60).reduced (14, 8));
     r.removeFromTop (12);
 
-    // Tip row + Regenerate / Export.
+    // Tip row: rotating tip on the left, Expand pill on the right (inside the card).
     auto tipRow = r.removeFromTop (46);
-    exportBtn_.setBounds (tipRow.removeFromRight (150).withSizeKeepingCentre (150, 40));
-    tipRow.removeFromRight (10);
-    regenBtn_.setBounds (tipRow.removeFromRight (130).withSizeKeepingCentre (130, 40));
-    tipRow.removeFromRight (10);
-    bypassBtn_.setBounds (tipRow.removeFromRight (110).withSizeKeepingCentre (110, 40));
-    tipRow.removeFromRight (12);
     tipCard_ = tipRow;
-    tipLbl_.setBounds (tipCard_.reduced (14, 0).withTrimmedLeft (34));
+    expandBtn_.setBounds (tipRow.removeFromRight (124).withSizeKeepingCentre (108, 32));
+    tipLbl_.setBounds (tipCard_.reduced (14, 0).withTrimmedLeft (44).withTrimmedRight (116));
     r.removeFromTop (12);
 
-    // Bottom panel.
+    // Bottom panel: waveform + ruler + data line.
     bottomCard_ = r;
     auto bc = bottomCard_.reduced (14, 12);
-    auto topStrip = bc.removeFromTop (18);
-    expandBtn_.setBounds (topStrip.removeFromRight (90).withSizeKeepingCentre (90, 22));
     waveArea_  = bc.removeFromTop (juce::jmax (40, bc.getHeight() - 46));
     waveRuler_ = bc.removeFromTop (12);
     bc.removeFromTop (4);
@@ -625,8 +636,15 @@ void MainView::loadParamsFromState (SessionState& ss)
     setB (IDs::statistical,  ss.statisticalMode.load());
     setB (IDs::spectral,     ss.spectralMode.load());
     setB (IDs::hissFilter,   ss.hissFilter.load());
-    setF (IDs::hissFreq,     ss.hissFreq.load());
-    setF (IDs::hissQ,        ss.hissQ.load());
+    for (int b = 0; b < kEqBands; ++b)
+    {
+        setB (ParameterState::eqId (b + 1, "On"), ss.eqBandOn[b].load());
+        if (auto* p = apvts.getParameter (ParameterState::eqId (b + 1, "Type")))
+            p->setValueNotifyingHost (p->convertTo0to1 ((float) ss.eqBandType[b].load()));
+        setF (ParameterState::eqId (b + 1, "Freq"), ss.eqBandFreq[b].load());
+        setF (ParameterState::eqId (b + 1, "Gain"), ss.eqBandGain[b].load());
+        setF (ParameterState::eqId (b + 1, "Q"),    ss.eqBandQ[b].load());
+    }
     setF (IDs::spectralBands, (float) ss.spectralBands.load());
     setB (IDs::spectralAdv,   ss.spectralAdvanced.load());
 
@@ -706,16 +724,25 @@ void MainView::timerCallback()
     // Hiss filter is live (audio thread) - mirror WITHOUT bumping generation. Active only in Enhance.
     const bool enh    = apvts.getRawParameterValue (IDs::paulStretch)->load() > 0.5f;
     const bool hissOn = apvts.getRawParameterValue (IDs::hissFilter)->load() > 0.5f;
-    ss.hissFilter.store (hissOn);
-    ss.hissFreq.store (apvts.getRawParameterValue (IDs::hissFreq)->load());
-    ss.hissQ.store (apvts.getRawParameterValue (IDs::hissQ)->load());
+    ss.hissFilter.store (hissOn); // parametric EQ master enable
+    // Mirror the EQ band params (APVTS -> SessionState atomics the audio thread reads). Live, no re-render.
+    for (int b = 0; b < kEqBands; ++b)
+    {
+        ss.eqBandOn[b].store   (apvts.getRawParameterValue (ParameterState::eqId (b + 1, "On"))->load() > 0.5f);
+        ss.eqBandType[b].store ((int) std::lround (apvts.getRawParameterValue (ParameterState::eqId (b + 1, "Type"))->load()));
+        ss.eqBandFreq[b].store (apvts.getRawParameterValue (ParameterState::eqId (b + 1, "Freq"))->load());
+        ss.eqBandGain[b].store (apvts.getRawParameterValue (ParameterState::eqId (b + 1, "Gain"))->load());
+        ss.eqBandQ[b].store    (apvts.getRawParameterValue (ParameterState::eqId (b + 1, "Q"))->load());
+    }
     hissBtn_.setEnabled (enh);
-    hissFreq_.slider.setEnabled (enh && hissOn); hissFreq_.label.setEnabled (enh && hissOn);
-    hissQ_.slider.setEnabled (enh && hissOn);    hissQ_.label.setEnabled (enh && hissOn);
-    const float hissA = enh ? 1.0f : 0.4f;
-    hissBtn_.setAlpha (hissA);
-    hissFreq_.slider.setAlpha (enh && hissOn ? 1.0f : 0.4f); hissFreq_.label.setAlpha (hissA);
-    hissQ_.slider.setAlpha (enh && hissOn ? 1.0f : 0.4f);    hissQ_.label.setAlpha (hissA);
+    hissBtn_.setAlpha (enh ? 1.0f : 0.4f);
+    // The EQ editor shows only while Enhance AND EQ are on; toggling reflows the action card.
+    const bool hissShow = enh && hissOn;
+    if (eqView_ != nullptr)
+    {
+        if (eqView_->isVisible() != hissShow) { eqView_->setVisible (hissShow); resized(); }
+        if (hissShow) eqView_->refresh();
+    }
 
     const bool stat = apvts.getRawParameterValue (IDs::statistical)->load() > 0.5f;
     const bool spec = apvts.getRawParameterValue (IDs::spectral)->load() > 0.5f;
@@ -732,9 +759,13 @@ void MainView::timerCallback()
     advBtn_.setEnabled (spec); advBtn_.setAlpha (spec ? 1.0f : 0.4f);
 
     gain_.slider.setEnabled (! normOn);
-    normTarget_.setEnabled (normOn);
     normUnit_.setEnabled (normOn);
-    normTarget_.setTextValueSuffix (normLufs ? " LUFS" : " dBFS");
+    normValueLbl_.setText (juce::String (normTarget_.getValue(), 1) + (normLufs ? " LUFS" : " dBFS"), juce::dontSendNotification);
+    for (auto* c : { (juce::Component*) &normMinus_, (juce::Component*) &normPlus_, (juce::Component*) &normValueLbl_ })
+    {
+        c->setEnabled (normOn);
+        c->setAlpha (normOn ? 1.0f : 0.5f);
+    }
     const float meas = normLufs ? ss.measuredLufs.load() : ss.measuredPeakDb.load();
     normReadout_.setText (meas > -119.0f ? "now " + juce::String (meas, 1) + (normLufs ? " LUFS" : " dBFS") : "", juce::dontSendNotification);
 

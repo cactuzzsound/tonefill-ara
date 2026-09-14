@@ -13,7 +13,7 @@ namespace
 // can be skipped and a future format extended without desyncing the stream.
 constexpr int kArchiveMagic  = 0x54464152; // 'TFAR'
 constexpr int kArchiveVer    = 1;
-constexpr int kParamBlockVer = 4; // v2=+spectralMode/Bands; v3=+advanced/Lo/Hi; v4=+spectral edges
+constexpr int kParamBlockVer = 5; // v2=+spectralMode/Bands; v3=+advanced/Lo/Hi; v4=+spectral edges; v5=+parametric EQ
 
 void writeParamBlock (juce::OutputStream& os, plugin::SessionState& ss)
 {
@@ -51,6 +51,16 @@ void writeParamBlock (juce::OutputStream& os, plugin::SessionState& ss)
     const auto edges = ss.getSpectralEdges();   // v4+
     os.writeInt ((int) edges.size());
     for (float f : edges) os.writeFloat (f);
+
+    os.writeInt (plugin::kEqBands);             // v5+ parametric EQ
+    for (int i = 0; i < plugin::kEqBands; ++i)
+    {
+        os.writeBool  (ss.eqBandOn[i].load());
+        os.writeInt   (ss.eqBandType[i].load());
+        os.writeFloat (ss.eqBandFreq[i].load());
+        os.writeFloat (ss.eqBandGain[i].load());
+        os.writeFloat (ss.eqBandQ[i].load());
+    }
 }
 
 bool readParamBlock (juce::InputStream& is, plugin::SessionState& ss)
@@ -104,6 +114,27 @@ bool readParamBlock (juce::InputStream& is, plugin::SessionState& ss)
         edges.reserve ((std::size_t) ne);
         for (int i = 0; i < ne; ++i) edges.push_back (juce::jlimit (20.0f, 22000.0f, is.readFloat()));
         ss.setSpectralEdges (std::move (edges));
+    }
+    if (ver >= 5)
+    {
+        const int nb = is.readInt();
+        if (nb < 0 || nb > 64) return false;
+        for (int i = 0; i < nb; ++i)
+        {
+            const bool  on = is.readBool();
+            const int   ty = is.readInt();
+            const float fr = is.readFloat();
+            const float gn = is.readFloat();
+            const float q  = is.readFloat();
+            if (i < plugin::kEqBands)
+            {
+                ss.eqBandOn[i].store (on);
+                ss.eqBandType[i].store (juce::jlimit (0, plugin::kEqNumTypes - 1, ty));
+                ss.eqBandFreq[i].store (juce::jlimit (20.0f, 20000.0f, fr));
+                ss.eqBandGain[i].store (juce::jlimit (-18.0f, 18.0f, gn));
+                ss.eqBandQ[i].store (juce::jlimit (0.1f, 10.0f, q));
+            }
+        }
     }
 
     ss.paramsEpoch.fetch_add (1);  // editor reloads the knobs

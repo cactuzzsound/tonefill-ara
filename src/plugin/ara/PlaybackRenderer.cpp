@@ -11,6 +11,7 @@
 #include "engine/model/RenderSettings.h"
 #include "dsp/SpectralBands.h"
 #include "dsp/AutoBands.h"
+#include "dsp/EqCoefficients.h"
 #include "plugin/SessionState.h"
 #include "plugin/ara/DocumentControllerImpl.h"
 
@@ -515,6 +516,14 @@ public:
                         auto bands = tonefill::dsp::splitBands (mono.data(), srcN, sampleRate, edges);
                         std::vector<float> accMono ((std::size_t) outN, 0.0f);
 
+                        // UI waveform overlay for spectral: the UNION of every band's clean selection,
+                        // so the highlight reflects that material is harvested per-band from across the
+                        // whole file (not just the one broadband-clean stretch). Auto mode only (manual
+                        // draws its own selection); band ranges are in src-sample coords (learnKept==src).
+                        const int  waveBins = 2000;
+                        const int  wper = juce::jmax (1, n / waveBins);
+                        std::vector<char> waveUnion ((std::size_t) waveBins, 0);
+
                         // Target timbre = the CLEAN room tone's spectral balance, measured full-band on
                         // the audio the broadband analysis already selected -- NOT the whole source's
                         // band energy, which is dominated by dialogue in the mid bands and would pump
@@ -562,6 +571,14 @@ public:
                             auto bandModel = analyze (thr, bandBuf, false, /*updateStatus*/ false);
                             if (bandModel == nullptr) continue;
 
+                            // Fold this band's selected ranges into the UI union overlay.
+                            for (const auto& cr : bandModel->cleanRanges)
+                            {
+                                const int b0 = juce::jlimit (0, waveBins - 1, cr.first / wper);
+                                const int b1 = juce::jlimit (0, waveBins - 1, (cr.second - 1) / wper);
+                                for (int bIdx = b0; bIdx <= b1; ++bIdx) waveUnion[(std::size_t) bIdx] = 1;
+                            }
+
                             engine::model::RenderSettings sb = s;
                             sb.targetChannels = 1;
                             sb.seed = s.seed ^ (0x9E3779B97F4A7C15ULL * (std::uint64_t) (bi + 1));
@@ -579,6 +596,23 @@ public:
                         }
 
                         if (! cancel.load()) { chans.assign ((std::size_t) effCh, accMono); haveChans = true; }
+
+                        // Publish the union overlay (Auto mode only; manual paints its own selection).
+                        if (! cancel.load() && ! manual)
+                        {
+                            tonefill::plugin::SessionState::WaveData wd;
+                            wd.peak.assign ((std::size_t) waveBins, 0.0f);
+                            wd.clean = std::move (waveUnion);
+                            const float* s0 = src.getReadPointer (0);
+                            for (int b = 0; b < waveBins; ++b)
+                            {
+                                float pk = 0.0f;
+                                const int from = b * wper, to = juce::jmin (from + wper, n);
+                                for (int i = from; i < to; ++i) pk = juce::jmax (pk, std::fabs (s0[i]));
+                                wd.peak[(std::size_t) b] = pk;
+                            }
+                            ss.setWave (std::move (wd));
+                        }
                     }
                     araLog ("spectral render: bands=" + juce::String ((int) edges.size() + 1)
                             + " outN=" + juce::String (outN));
@@ -793,22 +827,32 @@ bool ToneFillPlaybackRenderer::processBlock (juce::AudioBuffer<float>& buffer,
         }
     }
 
-    // Enhance-only HISS FILTER: a live low-pass that removes the HF hiss PaulStretch adds. Only when
-    // Enhance AND Hiss Filter are on. Coefficients are rebuilt only when the knobs move.
+    // Enhance-only PARAMETRIC EQ: a live 5-band biquad chain (replaces the old de-hiss low-pass).
+    // Active only when Enhance AND the EQ master (hissFilter) are on. Per-band coefficients are
+    // rebuilt only when that band's settings change.
     if (state_ != nullptr && state_->hissFilter.load() && state_->paulStretch.load())
     {
         const int nCh = buffer.getNumChannels();
-        if ((int) hissFilters_.size() < nCh) hissFilters_.resize ((std::size_t) nCh);
-        const float freq = juce::jlimit (3000.0f, 15000.0f, state_->hissFreq.load());
-        const float q    = juce::jlimit (0.3f, 2.0f, state_->hissQ.load());
-        if (std::abs (freq - hissLastFreq_) > 0.5f || std::abs (q - hissLastQ_) > 1.0e-3f)
+        if ((int) eqFilters_.size() < nCh) eqFilters_.resize ((std::size_t) nCh);
+        for (int b = 0; b < kEqBands; ++b)
         {
-            const auto co = juce::IIRCoefficients::makeLowPass (sampleRate, freq, q);
-            for (auto& f : hissFilters_) f.setCoefficients (co);
-            hissLastFreq_ = freq; hissLastQ_ = q;
+            const bool  on   = state_->eqBandOn[b].load();
+            const int   type = state_->eqBandType[b].load();
+            const float freq = juce::jlimit (20.0f, (float) (sampleRate * 0.49), state_->eqBandFreq[b].load());
+            const float gain = juce::jlimit (-18.0f, 18.0f, state_->eqBandGain[b].load());
+            const float q    = juce::jlimit (0.1f, 10.0f, state_->eqBandQ[b].load());
+            auto& cache = eqCache_[(std::size_t) b];
+            if (cache.on != on || cache.type != type || std::abs (cache.freq - freq) > 0.5f
+                || std::abs (cache.gain - gain) > 1.0e-3f || std::abs (cache.q - q) > 1.0e-3f)
+            {
+                const auto co = tonefill::dsp::makeEqCoefficients (sampleRate, type, freq, gain, q);
+                for (auto& chain : eqFilters_) chain[(std::size_t) b].setCoefficients (co);
+                cache = { on, type, freq, gain, q };
+            }
+            if (! on) continue;
+            for (int ch = 0; ch < nCh; ++ch)
+                eqFilters_[(std::size_t) ch][(std::size_t) b].processSamples (buffer.getWritePointer (ch), numSamples);
         }
-        for (int ch = 0; ch < nCh; ++ch)
-            hissFilters_[(std::size_t) ch].processSamples (buffer.getWritePointer (ch), numSamples);
     }
 
     // Output gain + meter. When Normalize is on the fill is already baked to target, so the

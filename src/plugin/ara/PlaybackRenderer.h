@@ -10,6 +10,7 @@
 
 #include "plugin/SessionState.h"
 
+#include <array>
 #include <atomic>
 #include <map>
 #include <memory>
@@ -81,10 +82,11 @@ private:
     std::atomic<bool>               analysisStarted { false };
     std::unique_ptr<FillWorker>     worker;
 
-    // Enhance-only live HF de-hiss: per-channel low-pass applied on the audio thread. Coeffs are
-    // rebuilt only when the freq/Q knobs move (cheap; not per sample).
-    std::vector<juce::IIRFilter> hissFilters_;
-    float hissLastFreq_ = -1.0f, hissLastQ_ = -1.0f;
+    // Enhance-only parametric EQ: per-channel chain of kEqBands biquads on the audio thread. Coeffs
+    // are rebuilt only when a band's settings change (cheap; not per sample).
+    std::vector<std::array<juce::IIRFilter, kEqBands>> eqFilters_; // [channel][band]
+    struct EqCache { bool on = false; int type = -1; float freq = -1.0f, gain = -999.0f, q = -1.0f; };
+    std::array<EqCache, kEqBands> eqCache_ {};
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ToneFillPlaybackRenderer)
 };

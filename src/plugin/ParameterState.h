@@ -46,11 +46,15 @@ public:
         static constexpr auto bypass         = "bypass";         // A/B monitor: source vs room tone
         static constexpr auto learnMode      = "learnMode";      // AudioSuite: learn from selection vs generate
         static constexpr auto renderLength   = "renderLength";   // Export WAV length, seconds
-        static constexpr auto hissFilter     = "hissFilter";     // Enhance-only live HF de-hiss on/off
-        static constexpr auto hissFreq       = "hissFreq";       // de-hiss corner frequency (Hz)
-        static constexpr auto hissQ          = "hissQ";          // de-hiss filter Q
+        static constexpr auto hissFilter     = "hissFilter";     // Enhance-only parametric EQ master on/off
+        static constexpr auto hissFreq       = "hissFreq";       // (legacy, unused by UI)
+        static constexpr auto hissQ          = "hissQ";          // (legacy, unused by UI)
         // seed is plain processor state (not automatable), not an APVTS parameter.
     };
+
+    // Enhance-only parametric EQ parameter IDs, generated per band (1..kEqBands).
+    // field is one of "On" / "Type" / "Freq" / "Gain" / "Q".
+    static juce::String eqId (int band, const char* field) { return "eq" + juce::String (band) + field; }
 
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();

@@ -9,10 +9,31 @@
 
 namespace tonefill::plugin
 {
+// Enhance-only parametric EQ (replaces the single de-hiss low-pass). Five fully flexible bands,
+// each with a selectable filter type. Type order is shared by the UI, the DSP and serialization.
+static constexpr int kEqBands = 5;
+enum EqType { EqBell = 0, EqLowShelf, EqHighShelf, EqHighPass, EqLowPass, EqNotch, kEqNumTypes };
+
 // Process-global bridge between the editor UI (parameters in) and the ARA playback renderer's
 // background worker (render params in, analysis status + meter + export buffer out).
 struct SessionState
 {
+    SessionState()
+    {
+        // De-hiss-friendly defaults spread across the spectrum; all bands start off.
+        const int   defType[kEqBands] = { EqHighPass, EqLowShelf, EqBell, EqBell, EqLowPass };
+        const float defFreq[kEqBands] = { 40.0f, 150.0f, 1000.0f, 5000.0f, 9000.0f };
+        const float defQ   [kEqBands] = { 0.707f, 0.707f, 1.0f, 1.0f, 0.707f };
+        for (int i = 0; i < kEqBands; ++i)
+        {
+            eqBandOn  [i].store (false);
+            eqBandType[i].store (defType[i]);
+            eqBandFreq[i].store (defFreq[i]);
+            eqBandGain[i].store (0.0f);
+            eqBandQ   [i].store (defQ[i]);
+        }
+    }
+
     // UI -> worker (render controls)
     std::atomic<int>           mode { 3 };            // 0 static, 1 hybrid, 2 complex, 3 ambience
     std::atomic<float>         tonalRetention { 1.0f };
@@ -41,9 +62,15 @@ struct SessionState
     std::atomic<float>         spectralLoHz { 150.0f };   // advanced: low band edge (Hz)
     std::atomic<float>         spectralHiHz { 8000.0f };  // advanced: high band edge (Hz)
     std::atomic<bool>          bypass { false };          // A/B monitor: play the source instead of the fill
-    std::atomic<bool>          hissFilter { false };  // Enhance-only live HF de-hiss (audio thread)
-    std::atomic<float>         hissFreq { 9000.0f };  // de-hiss corner (Hz)
-    std::atomic<float>         hissQ { 0.707f };      // de-hiss Q
+    std::atomic<bool>          hissFilter { false };  // Enhance-only parametric EQ master enable (audio thread)
+    std::atomic<float>         hissFreq { 9000.0f };  // (legacy, vestigial: kept for archive layout compat)
+    std::atomic<float>         hissQ { 0.707f };      // (legacy, vestigial)
+    // Enhance-only parametric EQ bands (audio thread). See EqType above. Initialised in the ctor.
+    std::atomic<bool>          eqBandOn   [kEqBands];
+    std::atomic<int>           eqBandType [kEqBands];
+    std::atomic<float>         eqBandFreq [kEqBands]; // Hz
+    std::atomic<float>         eqBandGain [kEqBands]; // dB (Bell / shelves only)
+    std::atomic<float>         eqBandQ    [kEqBands];
     std::atomic<int>           sourceSamples { 0 };   // length of the analysed source (UI mapping)
     std::atomic<double>        sourceSampleRate { 48000.0 }; // for the UI timecode ruler
     std::atomic<std::uint64_t> seed { 1 };

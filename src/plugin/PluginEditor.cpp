@@ -11,8 +11,8 @@ PluginEditor::PluginEditor (PluginProcessor& p)
 {
     addAndMakeVisible (mainView_);
     setResizable (true, true);
-    if (auto* c = getConstrainer()) c->setMinimumSize (860, 560);
-    setSize (980, 640);
+    if (auto* c = getConstrainer()) c->setMinimumSize (1080, 580);
+    setSize (1200, 656);
 }
 
 PluginEditor::~PluginEditor() = default;

@@ -17,6 +17,7 @@ namespace tonefill::plugin::ui
 {
 class WaveformWindow;
 class SpectralEditorWindow;
+class EqView;
 
 class MainView : public juce::Component, private juce::Timer
 {
@@ -68,15 +69,18 @@ private:
     juce::TextButton expandBtn_ { "Expand" };                            // open large waveform window
     juce::TextButton bypassBtn_ { "Bypass" };                            // A/B: play source vs room tone
 
-    // Loudness normalize.
+    // Loudness normalize. normTarget_ is the hidden parameter-bound backing; the value is presented
+    // as a −/value/+ stepper (normMinus_ / normValueLbl_ / normPlus_).
     juce::TextButton normBtn_ { "Normalize" };
     juce::Slider     normTarget_;
+    juce::TextButton normMinus_ { "" }, normPlus_ { "" };
+    juce::Label      normValueLbl_;
     juce::ComboBox   normUnit_;
     juce::Label      normReadout_;
 
-    // Enhance-only live HF de-hiss (separate panel under Texture).
-    juce::TextButton hissBtn_ { "Hiss Filter" };
-    Knob hissFreq_, hissQ_;
+    // Enhance-only parametric EQ (master toggle in the action bar; graph editor expands below it).
+    juce::TextButton hissBtn_ { "EQ" };
+    std::unique_ptr<EqView> eqView_;
 
     // Rotating tip.
     juce::Label tipLbl_;
@@ -86,7 +90,7 @@ private:
     using SA  = juce::AudioProcessorValueTreeState::SliderAttachment;
     using BA  = juce::AudioProcessorValueTreeState::ButtonAttachment;
     using CBA = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
-    std::unique_ptr<SA> thA_, spA_, blA_, vaA_, mfA_, flA_, sbA_, gaA_, leA_, ntA_, hfrA_, hqA_;
+    std::unique_ptr<SA> thA_, spA_, blA_, vaA_, mfA_, flA_, sbA_, gaA_, leA_, ntA_;
     std::unique_ptr<BA>  neA_, wfA_, enA_, hbA_, byA_, adA_;
     std::unique_ptr<CBA> nuA_;
 
@@ -98,7 +102,7 @@ private:
 
     SessionState::WaveData wave_;
     float meterDb_ = -120.0f;
-    juce::Rectangle<int> headerGroups_, normCard_, hissCard_, bottomCard_, tipCard_;
+    juce::Rectangle<int> headerGroups_, actionCard_, bottomCard_, tipCard_;
     juce::Rectangle<int> waveArea_, waveRuler_, dataArea_, meterArea_;
 
     // Manual learn-region selection (source-sample coordinates).
