@@ -41,6 +41,19 @@ if [ "$WANT_AAX" = 1 ]; then
 fi
 mkdir -p "$DIST"
 
+# Installer welcome text + a brand mark shown behind the panel (single hyphens only).
+cp "$ROOT/assets/tonefill_mark.png" "$STAGE/tf-bg.png"
+cat > "$STAGE/welcome.html" <<'HTML'
+<!DOCTYPE html><html><head><meta charset="utf-8"></head>
+<body style="font-family:-apple-system,Helvetica,sans-serif;font-size:12px;color:#1f1300;margin:0;">
+<h2 style="margin:0 0 8px 0;">ToneFill</h2>
+<p style="margin:0 0 10px 0;">Seamless room tone generator for dialogue post - fills gaps, patches edits
+and smooths cuts with room tone made from the clip itself.</p>
+<p style="margin:0;">Choose the plug-in formats on the next screen. VST3 (with ARA) and AU install to the
+system plug-in folders; AAX installs for Pro Tools. Runs a 7-day full trial, then a license key unlocks it.</p>
+</body></html>
+HTML
+
 echo "==> Codesigning VST3 + AU (Developer ID Application, hardened runtime)"
 for B in "$VST3" "$AU"; do
     codesign --force --deep --options runtime --timestamp --sign "$APP_ID" "$B"
@@ -78,6 +91,8 @@ cat > "$STAGE/distribution.xml" <<XML
 <?xml version="1.0" encoding="utf-8"?>
 <installer-gui-script minSpecVersion="2">
     <title>ToneFill $VERSION</title>
+    <welcome file="welcome.html"/>
+    <background file="tf-bg.png" alignment="bottomleft" scaling="proportional"/>
     <organization>com.cactuzzsound</organization>
     <!-- "always" opens the format checkboxes straight away. With "allow" they hide behind a
          Customize button that reads as "you can't pick formats", which is the whole point here. -->
@@ -102,7 +117,7 @@ $AAX_PKGREF
 XML
 
 echo "==> Building signed product installer (Developer ID Installer)"
-productbuild --distribution "$STAGE/distribution.xml" --package-path "$STAGE" \
+productbuild --distribution "$STAGE/distribution.xml" --package-path "$STAGE" --resources "$STAGE" \
              --sign "$INST_ID" --timestamp "$DIST/ToneFill-$VERSION.pkg"
 
 echo "==> Verifying installer signature"

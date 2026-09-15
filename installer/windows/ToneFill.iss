@@ -32,10 +32,14 @@ OutputBaseFilename=ToneFill-{#AppVersion}-Windows
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
+WizardImageFile=wizard-large.bmp
+WizardSmallImageFile=wizard-small.bmp
+AppComments=ToneFill - seamless room tone generator for dialogue post.
 UninstallDisplayName={#AppName} {#AppVersion}
 
 [Messages]
-WelcomeLabel2=This will install {#AppName} {#AppVersion} on your computer.%n%nChoose the plug-in formats to install. VST3 (with ARA) goes to the shared VST3 folder; AAX goes to the Pro Tools plug-ins folder.
+WelcomeLabel1=Welcome to the {#AppName} setup
+WelcomeLabel2=ToneFill - seamless room tone generator for dialogue post.%n%nThis will install {#AppName} {#AppVersion}. Choose the plug-in formats to install - VST3 (with ARA) goes to the shared VST3 folder, AAX goes to the Pro Tools plug-ins folder.
 
 [Types]
 Name: "full";   Description: "VST3 + AAX (recommended)"
