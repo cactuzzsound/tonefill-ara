@@ -32,8 +32,13 @@ ActivationComponent::ActivationComponent (const juce::String& preFilledKey)
     activateBtn_.onClick = [this] { attemptActivation(); };
     addAndMakeVisible (activateBtn_);
 
-    buyBtn_.onClick = [] { juce::URL (LicenseManager::kBuyUrl).launchInDefaultBrowser(); };
+    buyBtn_.setTooltip ("Buy a perpetual licence (one-time).");
+    buyBtn_.onClick = [] { juce::URL (LicenseManager::kBuyUrlPerpetual).launchInDefaultBrowser(); };
     addAndMakeVisible (buyBtn_);
+
+    subBtn_.setTooltip ("Subscribe ($9/month or $69/year).");
+    subBtn_.onClick = [] { juce::URL (LicenseManager::kBuyUrlSubscription).launchInDefaultBrowser(); };
+    addAndMakeVisible (subBtn_);
 
     closeBtn_.onClick = [this] { if (onClose) onClose(); };
     addAndMakeVisible (closeBtn_);
@@ -114,7 +119,7 @@ void ActivationComponent::paint (juce::Graphics& g)
 
 void ActivationComponent::resized()
 {
-    const int cw = juce::jmin (440, getWidth() - 40), chh = 300;
+    const int cw = juce::jmin (460, getWidth() - 40), chh = 344;
     card_ = juce::Rectangle<int> (0, 0, cw, chh).withCentre (getLocalBounds().getCentre());
 
     auto b = card_.reduced (28, 24);
@@ -124,13 +129,15 @@ void ActivationComponent::resized()
     b.removeFromTop (10);
     key_.setBounds (b.removeFromTop (38));
     b.removeFromTop (8);
-    status_.setBounds (b.removeFromTop (34));
+    status_.setBounds (b.removeFromTop (32));
     b.removeFromTop (6);
-    auto row = b.removeFromTop (40);
-    activateBtn_.setBounds (row.removeFromLeft ((row.getWidth() - 10) / 2));
-    row.removeFromLeft (10);
-    buyBtn_.setBounds (row);
+    activateBtn_.setBounds (b.removeFromTop (38));
     b.removeFromTop (8);
-    closeBtn_.setBounds (b.removeFromTop (26));
+    auto row = b.removeFromTop (36);
+    buyBtn_.setBounds (row.removeFromLeft ((row.getWidth() - 10) / 2));
+    row.removeFromLeft (10);
+    subBtn_.setBounds (row);
+    b.removeFromTop (8);
+    closeBtn_.setBounds (b.removeFromTop (24));
 }
 } // namespace tonefill::licensing

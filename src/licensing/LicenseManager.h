@@ -27,7 +27,8 @@ public:
     // a one-time (perpetual) product and a membership (subscription, monthly+yearly tiers).
     static constexpr const char* kProductIdPerpetual    = "rNG7v7I5Z4FtBwpg00grzA==";
     static constexpr const char* kProductIdSubscription = "FE_n6_hoNqu8N625LQpe8w==";
-    static constexpr const char* kBuyUrl                = "https://cactuzzsound.gumroad.com/l/tonefill";
+    static constexpr const char* kBuyUrlPerpetual       = "https://cactuzzsound.gumroad.com/l/tonefill_perpetual";
+    static constexpr const char* kBuyUrlSubscription    = "https://cactuzzsound.gumroad.com/l/tonefill_subscription";
 
     static LicenseManager& getInstance();
 

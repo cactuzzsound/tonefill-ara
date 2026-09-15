@@ -34,7 +34,7 @@ private:
 
     juce::Label      title_, subtitle_, status_;
     juce::TextEditor key_;
-    juce::TextButton activateBtn_ { "Activate" }, buyBtn_ { "Buy license" }, closeBtn_ { "Continue in demo" };
+    juce::TextButton activateBtn_ { "Activate" }, buyBtn_ { "Buy $99" }, subBtn_ { "Subscribe" }, closeBtn_ { "Continue in demo" };
     juce::Rectangle<int> card_;
     bool busy_ { false };
 
