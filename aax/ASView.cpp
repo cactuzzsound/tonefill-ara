@@ -141,8 +141,8 @@ ASView::ASView (Bridge bridge) : bridge_ (std::move (bridge))
 
     // Licensing: demo auditions freely; an offline Render writes silence until activated.
     demoBadge_.getProperties().set ("accent", true);
-    demoBadge_.setTooltip ("Demo mode: Preview/audition is free; Render unlocks after activation.");
-    demoBadge_.onClick = [this] { showActivation(); };
+    demoBadge_.setTooltip ("Enter your license key to activate ToneFill.");
+    demoBadge_.onClick = [this] { showActivation (tonefill::licensing::LicenseManager::getInstance().isExpired()); };
     addChildComponent (demoBadge_);
 
     tips_ = {
@@ -161,7 +161,7 @@ ASView::ASView (Bridge bridge) : bridge_ (std::move (bridge))
     tipLbl_.setJustificationType (juce::Justification::centredLeft);
     addAndMakeVisible (tipLbl_);
 
-    setSize (860, 548);
+    setSize (940, 560); // wider than before so the header fits the Activate badge without crowding
     startTimerHz (12);
     timerCallback();
 }
@@ -200,15 +200,18 @@ void ASView::openEqWindow()
     else eqWin_->toFront (true);
 }
 
-void ASView::showActivation()
+void ASView::showActivation (bool blocking)
 {
-    if (activation_ != nullptr) { activation_->toFront (true); return; }
-    activation_ = std::make_unique<tonefill::licensing::ActivationComponent> (
-        tonefill::licensing::LicenseManager::getInstance().getStoredKey());
-    auto dismiss = [this] { activation_.reset(); resized(); repaint(); };
-    activation_->onActivated = dismiss;
-    activation_->onClose     = dismiss;
-    addAndMakeVisible (*activation_);
+    auto& lm = tonefill::licensing::LicenseManager::getInstance();
+    if (activation_ == nullptr)
+    {
+        activation_ = std::make_unique<tonefill::licensing::ActivationComponent> (lm.getStoredKey());
+        auto dismiss = [this] { activation_.reset(); resized(); repaint(); };
+        activation_->onActivated = dismiss;
+        activation_->onClose     = dismiss;
+        addAndMakeVisible (*activation_);
+    }
+    activation_->setMode (blocking, lm.trialDaysLeft());
     activation_->setBounds (getLocalBounds());
     activation_->toFront (true);
 }
@@ -267,6 +270,14 @@ void ASView::timerCallback()
     en (eqEditBtn_, enh && hiss); // EQ editor button live only when Enhance + EQ are on
 
     if (++tipTick_ >= 300) { tipTick_ = 0; tipIdx_ = (tipIdx_ + 1) % (int) tips_.size(); tipLbl_.setText (tips_[(std::size_t) tipIdx_], juce::dontSendNotification); }
+
+    // Licensing: force the blocking overlay once the trial expired; countdown on the badge during trial.
+    {
+        auto& lm = tonefill::licensing::LicenseManager::getInstance();
+        if (lm.isExpired() && activation_ == nullptr) showActivation (true);
+        if (! lm.isActivated())
+            demoBadge_.setButtonText (lm.isTrialActive() ? "Trial " + juce::String (lm.trialDaysLeft()) + "d" : "Activate");
+    }
 
     // Refresh the waveform / status / "recomputing" area every tick (the VST's MainView does the same).
     // Without this the main window only repainted on incidental events, so the analysis overlay showed

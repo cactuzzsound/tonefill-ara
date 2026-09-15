@@ -129,8 +129,8 @@ MainView::MainView (PluginProcessor& processor) : processor_ (processor)
 
     // Licensing: demo runs freely; Export is gated. A small "Activate" badge shows while unactivated.
     demoBadge_.getProperties().set ("accent", true);
-    demoBadge_.setTooltip ("Demo mode: playback and audition are free; Export unlocks after activation.");
-    demoBadge_.onClick = [this] { showActivation(); };
+    demoBadge_.setTooltip ("Enter your license key to activate ToneFill.");
+    demoBadge_.onClick = [this] { showActivation (licensing::LicenseManager::getInstance().isExpired()); };
     addChildComponent (demoBadge_);
 
     expandBtn_.setTooltip ("Open a large waveform view with a timecode ruler, zoom and scroll for precise selecting.");
@@ -806,29 +806,41 @@ void MainView::timerCallback()
     // Rotate the tip every ~30 s (timer is 15 Hz -> 450 ticks).
     if (++tipTick_ >= 450) { tipTick_ = 0; tipIdx_ = (tipIdx_ + 1) % (int) tips_.size(); tipLbl_.setText (tips_[(std::size_t) tipIdx_], juce::dontSendNotification); }
 
+    // Licensing: force the blocking activation overlay once the trial has expired; show the days-left
+    // countdown on the badge during an active trial.
+    {
+        auto& lm = licensing::LicenseManager::getInstance();
+        if (lm.isExpired() && activation_ == nullptr) showActivation (true);
+        if (! lm.isActivated())
+            demoBadge_.setButtonText (lm.isTrialActive() ? "Trial " + juce::String (lm.trialDaysLeft()) + "d" : "Activate");
+    }
+
     wave_ = ss.getWave();
     if (! dragging_) selections_ = ss.getManualRanges();
     meterDb_ = meterDb_ * 0.7f + ss.outMeterDb.load() * 0.3f;
     repaint();
 }
 
-void MainView::showActivation()
+void MainView::showActivation (bool blocking)
 {
-    if (activation_ != nullptr) { activation_->toFront (true); return; }
-    activation_ = std::make_unique<licensing::ActivationComponent> (
-        licensing::LicenseManager::getInstance().getStoredKey());
-    auto dismiss = [this] { activation_.reset(); resized(); repaint(); };
-    activation_->onActivated = dismiss;
-    activation_->onClose     = dismiss;
-    addAndMakeVisible (*activation_);
+    auto& lm = licensing::LicenseManager::getInstance();
+    if (activation_ == nullptr)
+    {
+        activation_ = std::make_unique<licensing::ActivationComponent> (lm.getStoredKey());
+        auto dismiss = [this] { activation_.reset(); resized(); repaint(); };
+        activation_->onActivated = dismiss;
+        activation_->onClose     = dismiss;
+        addAndMakeVisible (*activation_);
+    }
+    activation_->setMode (blocking, lm.trialDaysLeft());
     activation_->setBounds (getLocalBounds());
     activation_->toFront (true);
 }
 
 void MainView::exportWav()
 {
-    // Demo gate: Export is unlocked only after activation.
-    if (! licensing::LicenseManager::getInstance().isActivated()) { showActivation(); return; }
+    // Trial expired: block until activated (during the trial everything works).
+    if (! licensing::LicenseManager::getInstance().isUsable()) { showActivation (true); return; }
 
     double sr = 48000.0;
     auto fill = processor_.sessionState().getExportFill (sr);

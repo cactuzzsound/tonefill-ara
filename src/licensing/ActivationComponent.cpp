@@ -11,8 +11,7 @@ ActivationComponent::ActivationComponent (const juce::String& preFilledKey)
     title_.setJustificationType (juce::Justification::centred);
     addAndMakeVisible (title_);
 
-    subtitle_.setText ("Enter your license key. Demo mode plays and auditions freely; "
-                       "Export and offline Render unlock after activation.", juce::dontSendNotification);
+    subtitle_.setText ("Enter your license key to unlock ToneFill.", juce::dontSendNotification);
     subtitle_.setFont (juce::Font (12.5f));
     subtitle_.setColour (juce::Label::textColourId, LNF::label());
     subtitle_.setJustificationType (juce::Justification::centredTop);
@@ -47,6 +46,26 @@ ActivationComponent::ActivationComponent (const juce::String& preFilledKey)
 }
 
 ActivationComponent::~ActivationComponent() = default;
+
+void ActivationComponent::setMode (bool blocking, int trialDaysLeft)
+{
+    if (blocking)
+    {
+        title_.setText ("Trial expired", juce::dontSendNotification);
+        subtitle_.setText ("Your ToneFill trial has ended. Enter your license key to keep using it.",
+                           juce::dontSendNotification);
+        closeBtn_.setVisible (false);
+    }
+    else
+    {
+        title_.setText ("Activate ToneFill", juce::dontSendNotification);
+        subtitle_.setText (trialDaysLeft == 1 ? "1 day left in your trial. Activate any time."
+                                              : juce::String (trialDaysLeft) + " days left in your trial. Activate any time.",
+                           juce::dontSendNotification);
+        closeBtn_.setButtonText ("Continue trial");
+        closeBtn_.setVisible (true);
+    }
+}
 
 void ActivationComponent::setStatus (const juce::String& msg, juce::Colour col)
 {

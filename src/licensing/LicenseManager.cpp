@@ -1,5 +1,7 @@
 #include "licensing/LicenseManager.h"
 
+#include <cmath>
+
 #if JUCE_MAC
  #include <unistd.h>
  #include <pwd.h>
@@ -7,6 +9,19 @@
 
 namespace tonefill::licensing
 {
+// Trial-clock file in the REAL home dir (survives plugin reinstall and the Logic AU sandbox), kept
+// separate from the license file so it never clobbers activation.
+static juce::File realTrialFile()
+{
+#if JUCE_MAC
+    if (struct passwd* pw = getpwuid (getuid()))
+        if (pw->pw_dir != nullptr)
+            return juce::File (juce::String::fromUTF8 (pw->pw_dir)
+                               + "/Library/Application Support/Cactuzz Sound/ToneFill-Trial.dat");
+#endif
+    return {};
+}
+
 // Logic Pro sandboxes AU plugins, so JUCE's PropertiesFile path is redirected into the sandbox
 // container and can't see the activation the (non-sandboxed) VST3 wrote. getpwuid() reads the real
 // /Users/<name> from the passwd DB, unaffected by the sandbox — we also write/read there.
@@ -42,6 +57,35 @@ LicenseManager::LicenseManager()
 {
     props_ = std::make_unique<juce::PropertiesFile> (storageOptions());
     loadFromDisk();
+    ensureFirstRun();
+}
+
+void LicenseManager::ensureFirstRun()
+{
+    auto parse = [] (const juce::String& iso) { return iso.isNotEmpty() ? juce::Time::fromISO8601 (iso) : juce::Time (0); };
+    juce::Time eff (0);
+    auto consider = [&eff] (juce::Time t)
+    { if (t.toMilliseconds() > 0 && (eff.toMilliseconds() == 0 || t < eff)) eff = t; };
+
+    consider (parse (props_->getValue ("firstRun", "")));
+    const auto tf = realTrialFile();
+    if (tf.existsAsFile()) consider (parse (tf.loadFileAsString().trim()));
+
+    if (eff.toMilliseconds() == 0) eff = juce::Time::getCurrentTime(); // first ever run
+    firstRun_ = eff;
+
+    const auto iso = eff.toISO8601 (true);
+    props_->setValue ("firstRun", iso);
+    props_->save();
+    if (tf != juce::File{}) { tf.getParentDirectory().createDirectory(); tf.replaceWithText (iso); }
+}
+
+int LicenseManager::trialDaysLeft() const
+{
+    if (activated_) return kTrialDays;
+    const double ms   = (double) (juce::Time::getCurrentTime().toMilliseconds() - firstRun_.toMilliseconds());
+    const double days = ms / (1000.0 * 60.0 * 60.0 * 24.0);
+    return juce::jmax (0, (int) std::ceil ((double) kTrialDays - days));
 }
 
 void LicenseManager::loadFromDisk()

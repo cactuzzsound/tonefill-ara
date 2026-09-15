@@ -12,6 +12,7 @@
 #include "dsp/SpectralBands.h"
 #include "dsp/AutoBands.h"
 #include "dsp/EqCoefficients.h"
+#include "licensing/LicenseManager.h"
 #include "plugin/SessionState.h"
 #include "plugin/ara/DocumentControllerImpl.h"
 
@@ -871,6 +872,14 @@ bool ToneFillPlaybackRenderer::processBlock (juce::AudioBuffer<float>& buffer,
     }
     if (state_ != nullptr)
         state_->outMeterDb.store (peak > 1.0e-6f ? 20.0f * std::log10 (peak) : -120.0f);
+
+    // Trial expired + not activated: mute the room-tone output (the editor also forces the activation
+    // overlay). During the trial everything plays normally.
+    if (tonefill::licensing::LicenseManager::getInstance().isExpired())
+    {
+        buffer.clear();
+        if (state_ != nullptr) state_->outMeterDb.store (-120.0f);
+    }
 
     return true;
 }

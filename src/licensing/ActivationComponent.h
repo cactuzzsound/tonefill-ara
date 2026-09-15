@@ -17,7 +17,10 @@ public:
     ~ActivationComponent() override;
 
     std::function<void()> onActivated; // license accepted + stored
-    std::function<void()> onClose;     // dismissed (still in demo)
+    std::function<void()> onClose;     // dismissed (only offered during an active trial)
+
+    // blocking = trial expired: the dialog can't be dismissed until a key is entered.
+    void setMode (bool blocking, int trialDaysLeft);
 
     void paint (juce::Graphics&) override;
     void resized() override;

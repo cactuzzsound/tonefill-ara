@@ -77,7 +77,7 @@ private:
     juce::TextButton regenBtn_ { "Regenerate" }, bypassBtn_ { "Bypass" }, expandBtn_ { "Expand" };
     juce::TextButton demoBadge_ { "Activate" }; // shown only while unactivated
     std::unique_ptr<tonefill::licensing::ActivationComponent> activation_;
-    void showActivation();
+    void showActivation (bool blocking);
 
     // Waveform + manual selection (source-sample coords, mirrored to shared->manualRanges).
     int  waveSamples_ = 0;

@@ -45,7 +45,7 @@ private:
     void drawGroupIcon (juce::Graphics&, juce::Rectangle<float> box, int icon, juce::Colour) const;
     void openWaveformWindow();
     void openSpectralWindow();
-    void showActivation();   // overlay the license dialog over the editor
+    void showActivation (bool blocking); // overlay the license dialog (blocking = trial expired)
 
     PluginProcessor& processor_;
     ToneFillLookAndFeel lnf_;

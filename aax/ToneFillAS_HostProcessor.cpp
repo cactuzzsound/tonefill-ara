@@ -651,8 +651,8 @@ AAX_Result ToneFillAS_HostProcessor::RenderAudio (const float* const inAudioIns[
     // Preview: don't block - play the last-good fill; the worker swaps the new one in when ready.
     const bool previewing = (sh != nullptr) && sh->previewing.load();
 
-    // Demo gate: audition (Preview) is free, but an offline Render writes SILENCE until activated.
-    if (! previewing && ! tonefill::licensing::LicenseManager::getInstance().isActivated())
+    // Trial expired + not activated: mute output (Preview and Render). Full functionality during the trial.
+    if (tonefill::licensing::LicenseManager::getInstance().isExpired())
     {
         for (int c = 0; c < ci; ++c)
             if (inAudioOuts[c]) std::memset (inAudioOuts[c], 0, sizeof (float) * (std::size_t) n);
