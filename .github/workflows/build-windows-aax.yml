@@ -179,6 +179,7 @@ jobs:
 
       # ── PACE sign via iLok Cloud + self-signed cert (no paid cert) ──────────────
       - name: Sign AAX with wraptool (iLok Cloud)
+        continue-on-error: true   # this account has no cloud signing; expected to fail -> sign on the VM
         shell: powershell
         timeout-minutes: 20
         env:
@@ -236,11 +237,13 @@ jobs:
           echo "AAX signed with PACE wraptool"
 
       - name: Verify signature
+        continue-on-error: true   # depends on the (expected-to-fail) cloud sign step
         shell: powershell
         run: |
           Invoke-Expression "& `"$env:WRAPTOOL`" verify --verbose --in `"$env:AAX_PATH`"" 2>&1 | Select-Object -Last 12
 
       - name: Upload SIGNED AAX artifact
+        continue-on-error: true   # only present when cloud signing succeeded
         uses: actions/upload-artifact@v4
         with:
           name: ToneFill-Windows-AAX-signed
