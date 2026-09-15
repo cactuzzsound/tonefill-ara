@@ -126,6 +126,16 @@
   details[open] summary::after{content:"-"}
   details p{color:var(--muted); padding:0 0 18px; max-width:70ch}
 
+  /* line icons + stats + chips (minibox restraint, nerdstack mono) */
+  .ico{width:26px; height:26px; color:var(--accent); flex:none}
+  .ico svg{width:100%; height:100%; fill:none; stroke:currentColor; stroke-width:1.7; stroke-linecap:round; stroke-linejoin:round}
+  section{padding-block:76px}
+  .stats{display:grid; grid-template-columns:repeat(4,1fr); gap:18px; margin-top:38px}
+  @media (max-width:640px){.stats{grid-template-columns:repeat(2,1fr)}}
+  .stat .fig{font-family:var(--display); font-weight:700; font-size:clamp(40px,6vw,60px); line-height:.95; letter-spacing:-1.5px}
+  .stat .lab{font-family:var(--mono); font-size:12px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); margin-top:8px}
+  .chips{display:flex; flex-wrap:wrap; gap:8px; margin-top:22px}
+  .chips span{font-family:var(--mono); font-size:12px; color:var(--muted); border:1px solid var(--line); border-radius:999px; padding:5px 12px}
   footer{background:#1f1300; color:#c7d3dd; padding-block:40px}
   footer .wrap{display:flex; justify-content:space-between; gap:20px; flex-wrap:wrap; align-items:center}
   footer .word{font-family:var(--display); font-size:20px} footer .word b{color:#e8eef2} footer .word span{color:var(--accent)}
@@ -232,10 +242,16 @@
     <h2 class="title">You cut a line and the air drops out.</h2>
     <p class="lead">Library loops repeat and never quite match. Recording wild takes eats time you do not have. ToneFill makes the fill from the clip itself, so the tone already matches - no library, no loop points, no guesswork.</p>
     <div class="grid g4">
-      <div class="card"><div class="n">01</div><h3>From the clip</h3><p>Analyses your recording and lifts the clean ambience hiding between the words.</p></div>
-      <div class="card"><div class="n">02</div><h3>Seamless</h3><p>Tiles the bed with no audible repeats, at any length you need.</p></div>
-      <div class="card"><div class="n">03</div><h3>Spectral</h3><p>Harvests clean tone per frequency band across the whole take, so the low end stays solid.</p></div>
-      <div class="card"><div class="n">04</div><h3>Where you work</h3><p>ARA inside your DAW, or offline AudioSuite in Pro Tools.</p></div>
+      <div class="card"><div class="ico"><svg viewBox="0 0 24 24"><path d="M2 12h3l2-7 4 15 3-11 2 4h6"/></svg></div><h3>From the clip</h3><p>Analyses your recording and lifts the clean ambience hiding between the words.</p></div>
+      <div class="card"><div class="ico"><svg viewBox="0 0 24 24"><path d="M8 8h8a4 4 0 0 1 0 8H8a4 4 0 0 1 0-8z"/><path d="M8 4l-3 4 3 4"/></svg></div><h3>Seamless</h3><p>Tiles the bed with no audible repeats, at any length you need.</p></div>
+      <div class="card"><div class="ico"><svg viewBox="0 0 24 24"><path d="M5 20V10M10 20V5M15 20v-8M20 20v-6"/></svg></div><h3>Spectral</h3><p>Harvests clean tone per frequency band across the whole take, so the low end stays solid.</p></div>
+      <div class="card"><div class="ico"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/></svg></div><h3>Where you work</h3><p>ARA inside your DAW, or offline AudioSuite in Pro Tools.</p></div>
+    </div>
+    <div class="stats">
+      <div class="stat"><div class="fig">3</div><div class="lab">selection engines</div></div>
+      <div class="stat"><div class="fig">5</div><div class="lab">band EQ</div></div>
+      <div class="stat"><div class="fig">0</div><div class="lab">audible loop points</div></div>
+      <div class="stat"><div class="fig">7</div><div class="lab">day free trial</div></div>
     </div>
   </div>
 </section>
@@ -256,13 +272,14 @@
   <div class="wrap">
     <p class="eyebrow">Under the hood</p>
     <h2 class="title">Built for dialogue editors</h2>
+    <div class="chips"><span>Clean Level</span><span>Voice Reject</span><span>Min Fill</span><span>Flatness</span><span>Crossfade</span><span>Spectral</span><span>Enhance</span><span>EQ</span><span>Normalize</span></div>
     <div class="grid g3">
-      <div class="card"><h3>Precise detection</h3><p>Define exactly what counts as clean.</p><ul><li>Clean Level - reject claps and loud bits</li><li>Voice Reject - strip breaths and mouth noise</li><li>Min Fill - longer, steadier chunks</li></ul></div>
-      <div class="card"><h3>Three engines</h3><p>Pick the selector by ear.</p><ul><li>Classic - the tuned gate stack</li><li>Experimental - per-frame scoring</li><li>Spectral - per-band across the whole take</li></ul></div>
-      <div class="card"><h3>Enhance and EQ</h3><p>For material that will not blend.</p><ul><li>PaulStretch resynthesis for a smoother bed</li><li>5-band parametric EQ on a response graph</li><li>Tames any HF hiss</li></ul></div>
-      <div class="card"><h3>Loudness match</h3><p>Bake the output to a target in LUFS or dBFS, or ride the Output.</p></div>
-      <div class="card"><h3>Manual control</h3><p>Draw your own room-tone regions on the waveform, with a large zoomable view for precise selecting.</p></div>
-      <div class="card"><h3>Variations and export</h3><p>Regenerate a fresh take instantly, A / B against the source with Bypass, and export a WAV.</p></div>
+      <div class="card"><div class="ico"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M12 1v3M12 20v3M1 12h3M20 12h3"/></svg></div><h3>Precise detection</h3><p>Define exactly what counts as clean.</p><ul><li>Clean Level - reject claps and loud bits</li><li>Voice Reject - strip breaths and mouth noise</li><li>Min Fill - longer, steadier chunks</li></ul></div>
+      <div class="card"><div class="ico"><svg viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5 9-5z"/><path d="M3 13l9 5 9-5"/></svg></div><h3>Three engines</h3><p>Pick the selector by ear.</p><ul><li>Classic - the tuned gate stack</li><li>Experimental - per-frame scoring</li><li>Spectral - per-band across the whole take</li></ul></div>
+      <div class="card"><div class="ico"><svg viewBox="0 0 24 24"><path d="M4 8h16M4 16h16"/><circle cx="9" cy="8" r="2.4" fill="var(--surface)"/><circle cx="15" cy="16" r="2.4" fill="var(--surface)"/></svg></div><h3>Enhance and EQ</h3><p>For material that will not blend.</p><ul><li>PaulStretch resynthesis for a smoother bed</li><li>5-band parametric EQ on a response graph</li><li>Tames any HF hiss</li></ul></div>
+      <div class="card"><div class="ico"><svg viewBox="0 0 24 24"><path d="M4 15a8 8 0 0 1 16 0"/><path d="M12 15l4.5-3.5"/></svg></div><h3>Loudness match</h3><p>Bake the output to a target in LUFS or dBFS, or ride the Output.</p></div>
+      <div class="card"><div class="ico"><svg viewBox="0 0 24 24"><path d="M5 3l6 17 2.2-6.8L20 11z"/></svg></div><h3>Manual control</h3><p>Draw your own room-tone regions on the waveform, with a large zoomable view for precise selecting.</p></div>
+      <div class="card"><div class="ico"><svg viewBox="0 0 24 24"><path d="M12 3v11M8 10l4 4 4-4M5 20h14"/></svg></div><h3>Variations and export</h3><p>Regenerate a fresh take instantly, A / B against the source with Bypass, and export a WAV.</p></div>
     </div>
   </div>
 </section>
@@ -308,11 +325,15 @@
     <p class="eyebrow">FAQ</p>
     <h2 class="title">Good to know</h2>
     <div class="faq">
-      <details open><summary>Is there a trial?</summary><p>Yes. Every install runs for 7 days with the complete feature set - no watermark and no limits. When it ends, enter a licence key to keep going. Nothing you already made disappears.</p></details>
+      <details open><summary>What is room tone, and why fill it?</summary><p>Room tone is the quiet ambient sound of a space with no one speaking - the air of the room. When you cut a line, move a take or splice two recordings, that background drops out or jumps, and the edit becomes audible. Laying a matching bed under and between the dialogue hides the seams, so a cut scene sounds continuous.</p></details>
+      <details><summary>How is this different from a room-tone library or a looped sample?</summary><p>A library never quite matches the mic, the room or the noise floor of your scene, and a short loop repeats audibly. ToneFill builds the bed from your own clip, so the tone already matches, and it tiles seamlessly with no repeat you can hear.</p></details>
+      <details><summary>What if the clip has almost no clean room tone?</summary><p>Turn on Enhance - it resynthesises the sparse material into a smooth, longer bed. Spectral mode also helps: it pulls clean tone per frequency band from across the whole take, so it can build a solid bed even when no single moment is clean everywhere. In a pinch, use Manual to point it at the quietest spots yourself.</p></details>
+      <details><summary>Can I fill one gap, or a whole scene?</summary><p>Both. The fill rebuilds live and you can print it across any region, or Export a seamless WAV at any length. Turn on Full / WHOLE FILE to scan the entire take for clean material.</p></details>
+      <details><summary>Does it remove noise or replace dialogue?</summary><p>No - ToneFill is a fill tool, not a denoiser and not a dialogue replacer. It generates matching background to sit under and between your dialogue. Run your usual noise reduction before or after it as normal.</p></details>
+      <details><summary>Auto or Manual - when do I use each?</summary><p>Leave it on Auto and it finds the clean room tone for you. Switch to Manual when a take is tricky or you want a specific stretch of ambience - drag your own regions on the waveform, and open Expand for a large, zoomable view.</p></details>
       <details><summary>Which hosts are supported?</summary><p>Any ARA2 host - Nuendo, Cubase, Studio One and Reaper - as a VST3 or AU, plus Pro Tools as an AAX AudioSuite plugin. macOS and Windows, 64-bit.</p></details>
-      <details><summary>Perpetual or subscription?</summary><p>Perpetual is a one-time purchase you keep forever. Subscription is the cheapest way in and always runs the latest version. Both unlock the same plugin and all formats.</p></details>
-      <details><summary>Does it need an internet connection?</summary><p>Only to activate, once. After that a perpetual licence works fully offline; a subscription re-checks online now and then and keeps working through short offline stretches.</p></details>
-      <details><summary>Do I need an iLok or a dongle?</summary><p>No. Activation is a simple licence key you paste into the plugin. No dongle, no iLok account.</p></details>
+      <details><summary>Is there a trial, and what happens when it ends?</summary><p>Every install runs a full 7-day trial - the complete plugin, no watermark and no limits. When it ends, enter a licence key to keep using it. Nothing you already printed or exported disappears.</p></details>
+      <details><summary>Licence, activation and dongles?</summary><p>Choose perpetual (one-time, yours forever) or a subscription ($9 / month or $69 / year, always the latest). Activation is a licence key you paste into the plugin - no iLok, no dongle. It checks online once; a perpetual licence then works offline, a subscription re-checks now and then.</p></details>
     </div>
   </div>
 </section>
