@@ -25,8 +25,8 @@ public:
 
     // TODO: paste the real Gumroad product ids (product settings -> "product_id"). Two products:
     // a one-time (perpetual) product and a membership (subscription, monthly+yearly tiers).
-    static constexpr const char* kProductIdPerpetual    = "REPLACE_WITH_TONEFILL_PERPETUAL_PRODUCT_ID";
-    static constexpr const char* kProductIdSubscription = "REPLACE_WITH_TONEFILL_SUBSCRIPTION_PRODUCT_ID";
+    static constexpr const char* kProductIdPerpetual    = "rNG7v7I5Z4FtBwpg00grzA==";
+    static constexpr const char* kProductIdSubscription = "FE_n6_hoNqu8N625LQpe8w==";
     static constexpr const char* kBuyUrl                = "https://cactuzzsound.gumroad.com/l/tonefill";
 
     static LicenseManager& getInstance();
