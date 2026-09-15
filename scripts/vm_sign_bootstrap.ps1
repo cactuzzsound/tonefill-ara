@@ -12,7 +12,7 @@
 $ErrorActionPreference = 'Stop'
 $Account = 'cactuzz'
 $Wcguid  = '53B16D60-73F3-11F1-B005-005056920FF7'
-$RunId   = '31094592635'   # CI run holding the unsigned artifact
+$RunId   = '34891273447'   # CI run holding the unsigned artifact (feat/spectral-mode, EQ + UI redesign)
 $Work    = 'C:\ToneFill'
 $Bundle  = Join-Path $Work 'ToneFill.aaxplugin'
 
