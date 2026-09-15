@@ -117,6 +117,9 @@ jobs:
           } else {
             Write-Host "No signed AAX in release v$ver - building a VST3-only installer."
           }
+          # Best-effort staging: a missing release makes `gh release download` set a non-zero
+          # $LASTEXITCODE which would otherwise fail this step. Force success.
+          exit 0
 
       # ── Inno Setup installer ────────────────────────────────────────────────────
       - name: Install Inno Setup
