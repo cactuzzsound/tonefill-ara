@@ -4,6 +4,8 @@
 #include "ASSpectralWindow.h"
 #include "ASWaveformWindow.h"
 #include "ASEqWindow.h"
+#include "licensing/LicenseManager.h"
+#include "licensing/ActivationComponent.h"
 
 #include "BinaryData.h"
 
@@ -137,6 +139,12 @@ ASView::ASView (Bridge bridge) : bridge_ (std::move (bridge))
     expandBtn_.onClick = [this] { openWaveformWindow(); };
     addAndMakeVisible (expandBtn_);
 
+    // Licensing: demo auditions freely; an offline Render writes silence until activated.
+    demoBadge_.getProperties().set ("accent", true);
+    demoBadge_.setTooltip ("Demo mode: Preview/audition is free; Render unlocks after activation.");
+    demoBadge_.onClick = [this] { showActivation(); };
+    addChildComponent (demoBadge_);
+
     tips_ = {
         "Push Voice Reject up to strip breaths and mouth noise from the bed.",
         "Keep Clean Level low - it rejects claps and loud bits harder.",
@@ -190,6 +198,19 @@ void ASView::openEqWindow()
         eqWin_->onClose = [this] { eqWin_.reset(); };
     }
     else eqWin_->toFront (true);
+}
+
+void ASView::showActivation()
+{
+    if (activation_ != nullptr) { activation_->toFront (true); return; }
+    activation_ = std::make_unique<tonefill::licensing::ActivationComponent> (
+        tonefill::licensing::LicenseManager::getInstance().getStoredKey());
+    auto dismiss = [this] { activation_.reset(); resized(); repaint(); };
+    activation_->onActivated = dismiss;
+    activation_->onClose     = dismiss;
+    addAndMakeVisible (*activation_);
+    activation_->setBounds (getLocalBounds());
+    activation_->toFront (true);
 }
 
 void ASView::timerCallback()
@@ -408,6 +429,9 @@ void ASView::resized()
 
     auto head = r.removeFromTop (40);
     head.removeFromLeft (230); // logo
+    const bool licd = tonefill::licensing::LicenseManager::getInstance().isActivated();
+    demoBadge_.setVisible (! licd);
+    if (! licd) { demoBadge_.setBounds (head.removeFromRight (86).withSizeKeepingCentre (86, 26)); head.removeFromRight (8); }
     {
         auto seg = [] (juce::Rectangle<int> box, juce::TextButton& a, juce::TextButton& b)
         { const int w = (box.getWidth() - 4) / 2; a.setBounds (box.removeFromLeft (w)); box.removeFromLeft (4); b.setBounds (box); };
@@ -489,6 +513,8 @@ void ASView::resized()
     waveRuler_ = wc.removeFromTop (12);
     wc.removeFromTop (4);
     dataArea_ = wc.removeFromTop (16);
+
+    if (activation_ != nullptr) activation_->setBounds (getLocalBounds());
 }
 
 int ASView::xToSample (int x) const

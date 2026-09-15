@@ -5,6 +5,8 @@
 #include "plugin/PluginProcessor.h"
 #include "plugin/ParameterState.h"
 #include "dsp/Loudness.h"
+#include "licensing/LicenseManager.h"
+#include "licensing/ActivationComponent.h"
 #include "BinaryData.h"
 
 #include <juce_audio_formats/juce_audio_formats.h>
@@ -124,6 +126,12 @@ MainView::MainView (PluginProcessor& processor) : processor_ (processor)
     addAndMakeVisible (advBtn_);
     adA_ = std::make_unique<BA> (apvts, IDs::spectralAdv, advBtn_);
     advBtn_.onClick = [this] { if (advBtn_.getToggleState()) openSpectralWindow(); };
+
+    // Licensing: demo runs freely; Export is gated. A small "Activate" badge shows while unactivated.
+    demoBadge_.getProperties().set ("accent", true);
+    demoBadge_.setTooltip ("Demo mode: playback and audition are free; Export unlocks after activation.");
+    demoBadge_.onClick = [this] { showActivation(); };
+    addChildComponent (demoBadge_);
 
     expandBtn_.setTooltip ("Open a large waveform view with a timecode ruler, zoom and scroll for precise selecting.");
     expandBtn_.getProperties().set ("icon", (int) LNF::IcExpand);
@@ -510,6 +518,9 @@ void MainView::resized()
 
     auto head = r.removeFromTop (40);
     head.removeFromLeft (290); // logo/wordmark drawn in paint
+    const bool licd = licensing::LicenseManager::getInstance().isActivated();
+    demoBadge_.setVisible (! licd);
+    if (! licd) { demoBadge_.setBounds (head.removeFromRight (92).withSizeKeepingCentre (92, 26)); head.removeFromRight (10); }
     {
         auto place = [] (juce::TextButton& a, juce::TextButton& b, juce::Rectangle<int> box)
         { const int w = (box.getWidth() - 4) / 2; a.setBounds (box.removeFromLeft (w)); box.removeFromLeft (4); b.setBounds (box); };
@@ -613,6 +624,8 @@ void MainView::resized()
     waveRuler_ = bc.removeFromTop (12);
     bc.removeFromTop (4);
     dataArea_ = bc.removeFromTop (16);
+
+    if (activation_ != nullptr) activation_->setBounds (getLocalBounds());
 }
 
 void MainView::loadParamsFromState (SessionState& ss)
@@ -792,8 +805,24 @@ void MainView::timerCallback()
     repaint();
 }
 
+void MainView::showActivation()
+{
+    if (activation_ != nullptr) { activation_->toFront (true); return; }
+    activation_ = std::make_unique<licensing::ActivationComponent> (
+        licensing::LicenseManager::getInstance().getStoredKey());
+    auto dismiss = [this] { activation_.reset(); resized(); repaint(); };
+    activation_->onActivated = dismiss;
+    activation_->onClose     = dismiss;
+    addAndMakeVisible (*activation_);
+    activation_->setBounds (getLocalBounds());
+    activation_->toFront (true);
+}
+
 void MainView::exportWav()
 {
+    // Demo gate: Export is unlocked only after activation.
+    if (! licensing::LicenseManager::getInstance().isActivated()) { showActivation(); return; }
+
     double sr = 48000.0;
     auto fill = processor_.sessionState().getExportFill (sr);
     if (fill == nullptr || fill->empty() || (*fill)[0].empty()) return;

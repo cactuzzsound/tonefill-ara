@@ -9,6 +9,8 @@
 #include <memory>
 #include <vector>
 
+namespace tonefill::licensing { class ActivationComponent; }
+
 namespace tonefill_aax
 {
 struct ASShared;
@@ -73,6 +75,9 @@ private:
     void openEqWindow();
     juce::TextButton autoBtn_ { "Auto" }, manualBtn_ { "Manual" };
     juce::TextButton regenBtn_ { "Regenerate" }, bypassBtn_ { "Bypass" }, expandBtn_ { "Expand" };
+    juce::TextButton demoBadge_ { "Activate" }; // shown only while unactivated
+    std::unique_ptr<tonefill::licensing::ActivationComponent> activation_;
+    void showActivation();
 
     // Waveform + manual selection (source-sample coords, mirrored to shared->manualRanges).
     int  waveSamples_ = 0;

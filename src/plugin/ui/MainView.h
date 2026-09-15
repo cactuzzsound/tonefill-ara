@@ -12,6 +12,7 @@
 #include <vector>
 
 namespace tonefill::plugin { class PluginProcessor; }
+namespace tonefill::licensing { class ActivationComponent; }
 
 namespace tonefill::plugin::ui
 {
@@ -44,6 +45,7 @@ private:
     void drawGroupIcon (juce::Graphics&, juce::Rectangle<float> box, int icon, juce::Colour) const;
     void openWaveformWindow();
     void openSpectralWindow();
+    void showActivation();   // overlay the license dialog over the editor
 
     PluginProcessor& processor_;
     ToneFillLookAndFeel lnf_;
@@ -68,6 +70,8 @@ private:
     juce::TextButton advBtn_ { "Advanced" };                             // Spectral: choose band range
     juce::TextButton expandBtn_ { "Expand" };                            // open large waveform window
     juce::TextButton bypassBtn_ { "Bypass" };                            // A/B: play source vs room tone
+    juce::TextButton demoBadge_ { "Activate" };                          // shown only while unactivated
+    std::unique_ptr<tonefill::licensing::ActivationComponent> activation_;
 
     // Loudness normalize. normTarget_ is the hidden parameter-bound backing; the value is presented
     // as a −/value/+ stepper (normMinus_ / normValueLbl_ / normPlus_).

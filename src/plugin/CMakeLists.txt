@@ -17,6 +17,8 @@ set(PLUGIN_SOURCES
     ParameterState.cpp
     ui/MainView.cpp
     ui/EqView.cpp
+    "${CMAKE_SOURCE_DIR}/src/licensing/LicenseManager.cpp"
+    "${CMAKE_SOURCE_DIR}/src/licensing/ActivationComponent.cpp"
     ui/WaveformWindow.cpp
     ui/SpectralEditor.cpp
     ui/SpectralEditorWindow.cpp
