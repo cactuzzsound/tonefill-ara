@@ -46,7 +46,7 @@ endif()
 # --- The plug-in bundle ------------------------------------------------------------------------
 aax_plugin(TARGET_NAME ToneFillAS
     OUTPUT_NAME "ToneFill"
-    VERSION 1.0.0
+    VERSION 0.9.5
     COPYRIGHT_STRING "Copyright 2026 Cactuzz Sound"
     BUNDLE_IDENTIFIER "com.cactuzzsound.tonefill.audiosuite")
 

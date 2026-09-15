@@ -57,6 +57,7 @@ endif()
 
 juce_add_plugin(ToneFillPlugin
     PRODUCT_NAME             "ToneFill"
+    VERSION                  0.9.5
     COMPANY_NAME             "cactuzz sound"   # MUST match LostComzz (same vendor in Logic)
     BUNDLE_ID                com.cactuzzsound.tonefill
     PLUGIN_MANUFACTURER_CODE Czsd              # same manufacturer code as LostComzz
