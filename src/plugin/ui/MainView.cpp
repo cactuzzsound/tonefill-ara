@@ -810,6 +810,7 @@ void MainView::timerCallback()
     // countdown on the badge during an active trial.
     {
         auto& lm = licensing::LicenseManager::getInstance();
+        lm.tickRecheck(); // re-validate a subscription when due
         if (lm.isExpired() && activation_ == nullptr) showActivation (true);
         if (! lm.isActivated())
             demoBadge_.setButtonText (lm.isTrialActive() ? "Trial " + juce::String (lm.trialDaysLeft()) + "d" : "Activate");

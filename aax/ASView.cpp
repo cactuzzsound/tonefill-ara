@@ -274,6 +274,7 @@ void ASView::timerCallback()
     // Licensing: force the blocking overlay once the trial expired; countdown on the badge during trial.
     {
         auto& lm = tonefill::licensing::LicenseManager::getInstance();
+        lm.tickRecheck(); // re-validate a subscription when due
         if (lm.isExpired() && activation_ == nullptr) showActivation (true);
         if (! lm.isActivated())
             demoBadge_.setButtonText (lm.isTrialActive() ? "Trial " + juce::String (lm.trialDaysLeft()) + "d" : "Activate");
