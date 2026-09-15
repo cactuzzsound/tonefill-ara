@@ -8,7 +8,14 @@
 namespace tonefill::plugin
 {
 // Thin editor shell. All real UI lives in ui/MainView. Message thread only.
+//
+// Inherits AudioProcessorEditorARAExtension so JUCE calls the ARA EditorView's setEditorOpen():
+// without it the host does not maintain a view selection for this instance, and the editor cannot
+// follow which clip is selected (getViewSelection would be empty / assert).
 class PluginEditor : public juce::AudioProcessorEditor
+#if TONEFILL_ARA_AVAILABLE
+                   , public juce::AudioProcessorEditorARAExtension
+#endif
 {
 public:
     explicit PluginEditor (PluginProcessor& p);

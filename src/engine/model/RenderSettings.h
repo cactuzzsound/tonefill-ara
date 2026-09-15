@@ -16,13 +16,20 @@ struct RenderSettings
     Mode  mode           = Mode::Hybrid;
     float tonalRetention = 1.0f;  // 0..1
     float textureAmount  = 0.5f;  // 0..1, grain vs noise balance
-    float movement       = 0.2f;  // 0..1, macro-envelope depth/rate
+    float movement       = 0.5f;  // Mix: dry grain cloud <-> wet PaulStretch (Enhance mode)
+    bool  paulStretch    = false; // Enhance: PaulStretch resynthesis on top of the real material
     float randomness     = 0.4f;  // 0..1, jitter + grain-path entropy
     float stereoWidth    = 0.5f;  // 0..1
+    // Fixed seam crossfade used by the legacy tonal-splice path (renderCore/commit-splice). NOT the
+    // grain/concat join crossfade - that one is derived per-join (see blendFrac below and the
+    // adaptive dB-driven crossfade in AmbienceModelBuilder's run concatenation).
     float crossfadeMs    = 40.0f;
 
     // Ambience (real-fragment) mode controls.
     float fragmentMs     = 800.0f; // length of each real fragment
+    // Grain/concat join crossfade, as a fraction of fragmentMs (0.05..0.5). Drives grainCloud's
+    // Crossfade knob (density) and concatenateAmbience's per-fragment blend. Distinct from
+    // crossfadeMs above, which is the fixed tonal-splice seam length.
     float blendFrac      = 0.3f;   // crossfade as a fraction of fragmentMs (0.05..0.5)
 
     core::Seed seed = 0;

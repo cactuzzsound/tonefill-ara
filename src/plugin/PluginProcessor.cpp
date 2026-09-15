@@ -11,13 +11,38 @@
 #include <atomic>
 #include <cmath>
 #include <cstring>
+#include <mutex>
 
 #if TONEFILL_ARA_AVAILABLE
+ #include "plugin/ara/DocumentControllerImpl.h"
  #include "plugin/ara/PlaybackRenderer.h"
 #endif
 
 namespace tonefill::plugin
 {
+// Process-global "last learned model" for the non-ARA Learn/Generate workflow. Pro Tools
+// AudioSuite uses SEPARATE plugin instances for the Learn (analyze/preview) pass and the Render
+// pass, so a per-instance member would be empty at Render time (-> silence). Sharing it here lets
+// the Render instance pick up what the Learn instance captured.
+struct GlobalLearned
+{
+    std::mutex m;
+    engine::model::AmbienceModelPtr model;
+    static GlobalLearned& get() { static GlobalLearned g; return g; }
+};
+static void setGlobalLearned (engine::model::AmbienceModelPtr m)
+{
+    auto& g = GlobalLearned::get();
+    std::lock_guard<std::mutex> l (g.m);
+    g.model = std::move (m);
+}
+static engine::model::AmbienceModelPtr getGlobalLearned()
+{
+    auto& g = GlobalLearned::get();
+    std::lock_guard<std::mutex> l (g.m);
+    return g.model;
+}
+
 // Temporary bring-up trace (always-on path, independent of ARA) -> ~/tonefill_ara.log.
 static void pluginLog (const juce::String& msg)
 {
@@ -44,17 +69,108 @@ void PluginProcessor::didBindToARA() noexcept
 {
     juce::AudioProcessorARAExtension::didBindToARA(); // JUCE requires calling the base hook
 
-    // Give THIS instance's playback renderer our per-instance SessionState, so its background
-    // worker publishes the waveform / status / manual selection to OUR editor only.
+    pluginLog ("didBindToARA: roles playbackRenderer=" + juce::String ((int) isPlaybackRenderer())
+               + " editorRenderer=" + juce::String ((int) isEditorRenderer())
+               + " editorView=" + juce::String ((int) isEditorView()));
+
+    tryResolveSharedState();
+
+    // Only a starting point: the renderer re-resolves the shared state from the document
+    // controller in prepareToPlay, once it knows which audio source it renders.
     if (auto* renderer = getPlaybackRenderer<ara::ToneFillPlaybackRenderer>())
     {
-        renderer->setSessionState (sessionState_);
+        renderer->setSessionState (sessionStatePtr());
         pluginLog ("didBindToARA: wired SessionState to playback renderer");
     }
-    else
+}
+
+bool PluginProcessor::tryResolveSharedState (bool canReadSelection)
+{
+    if (! isBoundToARA())
+        return false;
+
+    auto sourceOfFirstRegion = [] (const auto& regions) -> const juce::ARAAudioSource*
     {
-        pluginLog ("didBindToARA: no playback renderer for this instance");
+        for (auto* region : regions)
+            if (auto* modification = region->getAudioModification())
+                if (auto* source = modification->getAudioSource())
+                    return source;
+        return nullptr;
+    };
+
+    // Whichever role this instance got, it can reach the document controller the instances share.
+    ARA::PlugIn::DocumentController* documentController = nullptr;
+    const juce::ARAAudioSource* source = nullptr;
+    bool followsSelection = false;
+
+    // The editor is one persistent instance; the host re-points it at the selected clip. Read the
+    // current view selection so a second clip stops showing the first clip's state. getViewSelection
+    // requires an open editor UI, so only from the editor timer (canReadSelection).
+    if (canReadSelection)
+    {
+        if (auto* view = getEditorView())
+        {
+            documentController = view->getDocumentController();
+            followsSelection   = true;
+            source             = sourceOfFirstRegion (
+                view->getViewSelection().template getEffectivePlaybackRegions<juce::ARAPlaybackRegion>());
+        }
     }
+
+    if (documentController == nullptr)
+    {
+        if (auto* renderer = getPlaybackRenderer())
+        {
+            documentController = renderer->getDocumentController();
+            source             = sourceOfFirstRegion (renderer->getPlaybackRegions());
+        }
+        else if (auto* renderer = getEditorRenderer())
+        {
+            documentController = renderer->getDocumentController();
+            source             = sourceOfFirstRegion (renderer->getPlaybackRegions());
+        }
+        else if (auto* view = getEditorView())
+        {
+            documentController = view->getDocumentController();
+        }
+    }
+
+    auto* dc = ara::specialisedDocumentController (documentController);
+    if (dc == nullptr)
+        return false;
+
+    // A renderer instance renders one fixed region: resolve once and latch.
+    if (! followsSelection && sharedState_ != nullptr)
+        return true;
+
+    if (source == nullptr)
+    {
+        // Empty selection, or an editor-only instance with no region: keep what we show rather than
+        // blank the GUI, and on first resolve fall back to the document's single audio source.
+        if (sharedState_ != nullptr)
+            return true;
+        auto sole = dc->stateForSoleSource();
+        if (sole == nullptr)
+            return false;
+        resolvedSource_ = nullptr;
+        sharedState_    = std::move (sole);
+        statePtr_.store (sharedState_.get(), std::memory_order_release);
+        return true;
+    }
+
+    if (source == resolvedSource_)
+        return true; // already showing this clip
+
+    auto resolved = dc->stateForSource (source);
+    if (resolved == nullptr)
+        return false;
+
+    resolvedSource_ = source;
+    sharedState_    = std::move (resolved);
+    statePtr_.store (sharedState_.get(), std::memory_order_release);
+    pluginLog (followsSelection ? "re-pointed SessionState to selected source"
+                                : "resolved shared SessionState via region");
+    return true;
 }
 #endif
 
@@ -110,11 +226,23 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     const int numSamples = buffer.getNumSamples();
     const bool learn = params_.apvts.getRawParameterValue (ParameterState::IDs::learnMode)->load() > 0.5f;
 
+    {
+        static std::atomic<bool> loggedNonAra { false };
+        if (! loggedNonAra.exchange (true))
+            pluginLog ("processBlock NON-ARA first call: learnMode=" + juce::String ((int) learn)
+                       + " nonRealtime=" + juce::String ((int) isNonRealtime())
+                       + " ch=" + juce::String (numCh) + " block=" + juce::String (numSamples)
+                       + " mode=" + juce::String ((int) params_.apvts.getRawParameterValue (ParameterState::IDs::mode)->load()));
+    }
+
     if (learn)
     {
         // LEARN: accumulate the selection and analyze it into learnedModel_. Audio is left UNTOUCHED
         // (passthrough), so learning from a region never alters it. Works in Preview and Render.
-        const int cap = (int) (240.0 * currentSampleRate_);
+        // Learn from the WHOLE selection (up to 4 min, or 15 min with "Full") so there is as much
+        // clean material as the ARA path has - small windows make the grain cloud repetitive.
+        const bool whole = params_.apvts.getRawParameterValue (ParameterState::IDs::wholeFile)->load() > 0.5f;
+        const int cap = (int) ((whole ? 900.0 : 240.0) * currentSampleRate_);
         if (learnInput_.getNumSamples() != cap || learnInput_.getNumChannels() != juce::jmax (1, numCh))
         { learnInput_.setSize (juce::jmax (1, numCh), cap, true, true, true); learnInputLen_ = 0; learnDone_ = false; }
         if (learnInputLen_ < cap)
@@ -127,7 +255,7 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
         // block size), or as a safety once we have a lot of material / hit the cap.
         const bool tailBlock = hostBlockSize_ > 0 && numSamples > 0 && numSamples < hostBlockSize_
                                && learnInputLen_ > (int) (1.0 * currentSampleRate_);
-        const bool safety    = learnInputLen_ >= juce::jmin (cap, (int) (30.0 * currentSampleRate_));
+        const bool safety    = learnInputLen_ >= cap; // only when the selection fills the cap
         if (! learnDone_ && (tailBlock || safety))
             analyzeLearn();
         return; // passthrough
@@ -136,6 +264,14 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     // GENERATE: output room tone from the learned model - no input needed, so it starts at sample
     // 0 (no head silence). Rebuild the loopable fill only when render params change; tile it
     // otherwise. Output gain is applied per block so the knob responds live in Preview.
+    // Adopt the process-global model if this (possibly different) instance never learned.
+    if (learnedModel_ == nullptr) { learnedModel_ = getGlobalLearned(); genHash_ = 0; }
+    {
+        static std::atomic<bool> loggedGen { false };
+        if (! loggedGen.exchange (true))
+            pluginLog ("processBlock GENERATE first call: hasModel=" + juce::String ((int) (learnedModel_ != nullptr))
+                       + " realtime=" + juce::String ((int) (! isNonRealtime())) + " ch=" + juce::String (numCh));
+    }
     if (learnedModel_ == nullptr) { buffer.clear(); return; }
     const std::uint64_t h = genParamHash();
     if (h != genHash_ || genFillLen_ <= 0) { buildGenFill(); genHash_ = h; genPos_ = 0; }
@@ -179,15 +315,21 @@ void PluginProcessor::analyzeLearn()
     ctx.speechReject        = pv (ParameterState::IDs::speechReject);
     ctx.sourceContentHash   = (std::uint64_t) n;
 
+    pluginLog ("analyzeLearn: n=" + juce::String (n) + " ch=" + juce::String (ch)
+               + " thr=" + juce::String (ctx.cleanThreshold) + " voice=" + juce::String (ctx.speechReject));
     auto r = session.run (ctx, cancel);
-    if (! r.ok()) return;
+    if (! r.ok()) { pluginLog ("analyzeLearn: analysis FAILED"); return; }
     learnedModel_ = r.value();
+    const int cleanCh  = (int) learnedModel_->cleanAudioPerChannel.size();
+    const int cleanLen = (cleanCh > 0) ? (int) learnedModel_->cleanAudioPerChannel[0].size() : 0;
+    pluginLog ("analyzeLearn: OK learnSec=" + juce::String (learnedModel_->learnMaterialSeconds)
+               + " cleanCh=" + juce::String (cleanCh) + " cleanLen=" + juce::String (cleanLen)
+               + " modelCh=" + juce::String (learnedModel_->numChannels));
+    setGlobalLearned (learnedModel_); // share so a different Render instance can use it
     genHash_ = 0; genFillLen_ = 0; genFill_.clear(); // force regenerate from the new model
-    if (sessionState_ != nullptr)
-    {
-        sessionState_->learnSeconds.store (learnedModel_->learnMaterialSeconds);
-        sessionState_->phase.store (2);
-    }
+    auto& ss = sessionState();
+    ss.learnSeconds.store (learnedModel_->learnMaterialSeconds);
+    ss.phase.store (2);
 }
 
 std::uint64_t PluginProcessor::genParamHash() const
@@ -202,6 +344,7 @@ std::uint64_t PluginProcessor::genParamHash() const
     h = mix (h, bits (f (ParameterState::IDs::blend)));
     h = mix (h, bits (f (ParameterState::IDs::randomness)));
     h = mix (h, bits (f (ParameterState::IDs::movement)));
+    h = mix (h, f (ParameterState::IDs::paulStretch) > 0.5f ? 1u : 0u);
     return h;
 }
 
@@ -218,9 +361,9 @@ void PluginProcessor::buildGenFill()
                                       : (int) learnedModel_->cleanAudioPerChannel.size());
 
     engine::model::RenderSettings s;
-    s.mode           = (engine::model::Mode) juce::jlimit (0, 3, (int) pv (ParameterState::IDs::mode));
-    s.tonalRetention = pv (ParameterState::IDs::tonalRetention);
-    s.movement       = pv (ParameterState::IDs::movement);
+    s.mode           = engine::model::Mode::Ambience;
+    s.movement       = pv (ParameterState::IDs::movement);              // Mix
+    s.paulStretch    = pv (ParameterState::IDs::paulStretch) > 0.5f;    // Enhance
     s.fragmentMs     = 200.0f + pv (ParameterState::IDs::fragment) * 2800.0f;
     s.blendFrac      = 0.05f + pv (ParameterState::IDs::blend) * 0.45f;
     s.randomness     = pv (ParameterState::IDs::randomness);
@@ -232,10 +375,15 @@ void PluginProcessor::buildGenFill()
     s.targetChannels       = ch;
     s.targetDurationSamples = (long long) (loopLen + xf);
 
+    const int mdlCleanLen = learnedModel_->cleanAudioPerChannel.empty() ? 0
+                                : (int) learnedModel_->cleanAudioPerChannel[0].size();
+    pluginLog ("buildGenFill: mode=" + juce::String ((int) s.mode) + " ch=" + juce::String (ch)
+               + " modelCleanLen=" + juce::String (mdlCleanLen) + " loopLen=" + juce::String (loopLen));
+
     std::atomic<bool> cancel { false };
     engine::synthesis::AmbienceRenderer renderer;
     auto out = renderer.render (*learnedModel_, s, cancel);
-    if (! out.ok()) return;
+    if (! out.ok()) { pluginLog ("buildGenFill: render FAILED"); return; }
     auto chans = std::move (out.value().channels);
 
     for (auto& c : chans)
@@ -250,9 +398,10 @@ void PluginProcessor::buildGenFill()
             c.resize ((std::size_t) loopLen);
         }
     }
-    if (chans.empty() || chans[0].empty()) return;
+    if (chans.empty() || chans[0].empty()) { pluginLog ("buildGenFill: empty render"); return; }
     genFill_    = std::move (chans);
     genFillLen_ = (long long) genFill_[0].size();
+    pluginLog ("buildGenFill: DONE fillLen=" + juce::String (genFillLen_) + " ch=" + juce::String ((int) genFill_.size()));
 }
 
 juce::AudioProcessorEditor* PluginProcessor::createEditor()

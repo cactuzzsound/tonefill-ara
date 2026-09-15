@@ -16,6 +16,12 @@ set(PLUGIN_SOURCES
     PluginEditor.cpp
     ParameterState.cpp
     ui/MainView.cpp
+    ui/EqView.cpp
+    "${CMAKE_SOURCE_DIR}/src/licensing/LicenseManager.cpp"
+    "${CMAKE_SOURCE_DIR}/src/licensing/ActivationComponent.cpp"
+    ui/WaveformWindow.cpp
+    ui/SpectralEditor.cpp
+    ui/SpectralEditorWindow.cpp
     ara/ARAIntegrationFacade.cpp)
 
 # Compiled ONLY when the ARA SDK is available. These are the real JUCE<->ARA bindings that
@@ -51,11 +57,12 @@ endif()
 
 juce_add_plugin(ToneFillPlugin
     PRODUCT_NAME             "ToneFill"
-    COMPANY_NAME             "Cactuzz Sound"
+    VERSION                  0.9.5
+    COMPANY_NAME             "cactuzz sound"   # MUST match LostComzz (same vendor in Logic)
     BUNDLE_ID                com.cactuzzsound.tonefill
-    PLUGIN_MANUFACTURER_CODE Catz
+    PLUGIN_MANUFACTURER_CODE Czsd              # same manufacturer code as LostComzz
     PLUGIN_CODE              Tfil
-    FORMATS                  VST3 AU ${_tonefill_aax_kw}
+    FORMATS                  VST3 AU   # AAX is the native HostProcessor build under aax/ (not JUCE)
     ${_tonefill_ara_kw}                       # IS_ARA_EFFECT TRUE, or nothing
     IS_SYNTH                 FALSE
     NEEDS_MIDI_INPUT         FALSE
@@ -73,7 +80,10 @@ if(TONEFILL_ARA_AVAILABLE)
 endif()
 
 # Knob film-strip skin (Modern_4): embedded so the build needs no runtime asset path.
-juce_add_binary_data(ToneFillAssets SOURCES ${CMAKE_SOURCE_DIR}/assets/knob_modern.png)
+juce_add_binary_data(ToneFillAssets SOURCES
+    ${CMAKE_SOURCE_DIR}/assets/knob_modern.png
+    ${CMAKE_SOURCE_DIR}/assets/tonefill_mark.png
+    ${CMAKE_SOURCE_DIR}/assets/tonefill_word.png)
 set_target_properties(ToneFillAssets PROPERTIES POSITION_INDEPENDENT_CODE TRUE)
 
 target_compile_definitions(ToneFillPlugin PUBLIC
@@ -90,6 +100,7 @@ target_link_libraries(ToneFillPlugin
     PRIVATE
         ToneFillAssets
         tonefill_engine
+        juce::juce_dsp
         juce::juce_audio_utils
         juce::juce_audio_plugin_client
     PUBLIC

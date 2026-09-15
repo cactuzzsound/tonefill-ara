@@ -7,3 +7,10 @@ compile_commands.json
 
 # external dependencies (JUCE via -DJUCE_DIR, ARA SDK cloned)
 external/
+
+# Signed installer output
+dist/
+
+# Windows installer build outputs
+installer/windows/stage/
+installer/windows/Output/

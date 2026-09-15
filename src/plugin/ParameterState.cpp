@@ -30,9 +30,12 @@ APVTS::ParameterLayout ParameterState::createLayout()
     layout.add (std::make_unique<AudioParameterFloat> (ParameterID { IDs::speechReject, 1 },   "Voice Reject",  pct(), 0.5f));
     layout.add (std::make_unique<AudioParameterFloat> (ParameterID { IDs::fragment, 1 },       "Chunk Size",    pct(), 0.4f));
     layout.add (std::make_unique<AudioParameterFloat> (ParameterID { IDs::blend, 1 },          "Crossfade",     pct(), 0.3f));
-    layout.add (std::make_unique<AudioParameterFloat> (ParameterID { IDs::randomness, 1 },     "Variation",     pct(), 0.4f));
+    layout.add (std::make_unique<AudioParameterFloat> (ParameterID { IDs::randomness, 1 },     "Smoothness",    pct(), 0.4f));
     layout.add (std::make_unique<AudioParameterFloat> (ParameterID { IDs::tonalRetention, 1 }, "Hum Level",     pct(), 1.0f));
-    layout.add (std::make_unique<AudioParameterFloat> (ParameterID { IDs::movement, 1 },       "Movement",      pct(), 0.2f));
+    layout.add (std::make_unique<AudioParameterFloat> (ParameterID { IDs::minFill, 1 },  "Min Fill",
+        NormalisableRange<float> (0.2f, 5.0f, 0.05f), 2.0f));
+    layout.add (std::make_unique<AudioParameterFloat> (ParameterID { IDs::flatness, 1 }, "Flatness", pct(), 0.7f));
+    layout.add (std::make_unique<juce::AudioParameterBool> (ParameterID { IDs::paulStretch, 1 }, "Enhance", false));
     layout.add (std::make_unique<AudioParameterFloat> (ParameterID { IDs::outputGain, 1 }, "Output",
         NormalisableRange<float> (-24.0f, 24.0f, 0.1f), 0.0f));
     layout.add (std::make_unique<juce::AudioParameterBool> (ParameterID { IDs::normEnabled, 1 }, "Normalize", false));
@@ -41,9 +44,53 @@ APVTS::ParameterLayout ParameterState::createLayout()
     layout.add (std::make_unique<AudioParameterChoice> (ParameterID { IDs::normUnit, 1 }, "Norm Unit",
         juce::StringArray { "dBFS", "LUFS" }, 1));
     layout.add (std::make_unique<juce::AudioParameterBool> (ParameterID { IDs::wholeFile, 1 }, "Analyze Whole File", false));
+    // Default to the Experimental (statistical) engine: it is the reliable selector; Classic over-rejects
+    // on dialogue-heavy material. New instances start on Experimental; saved sessions keep their choice.
+    layout.add (std::make_unique<juce::AudioParameterBool> (ParameterID { IDs::statistical, 1 }, "Statistical Selection", true));
+    layout.add (std::make_unique<juce::AudioParameterBool> (ParameterID { IDs::spectral, 1 }, "Spectral Mosaic", false));
+    layout.add (std::make_unique<juce::AudioParameterInt> (ParameterID { IDs::spectralBands, 1 }, "Spectral Bands", 3, 12, 7));
+    layout.add (std::make_unique<juce::AudioParameterBool> (ParameterID { IDs::spectralAdv, 1 }, "Spectral Advanced", false));
+    layout.add (std::make_unique<AudioParameterFloat> (ParameterID { IDs::spectralLo, 1 }, "Spectral Low",
+        NormalisableRange<float> (30.0f, 2000.0f, 1.0f, 0.5f), 150.0f));
+    layout.add (std::make_unique<AudioParameterFloat> (ParameterID { IDs::spectralHi, 1 }, "Spectral High",
+        NormalisableRange<float> (2000.0f, 18000.0f, 1.0f, 0.5f), 8000.0f));
+    layout.add (std::make_unique<juce::AudioParameterBool> (ParameterID { IDs::bypass, 1 }, "Bypass (monitor source)", false));
     layout.add (std::make_unique<juce::AudioParameterBool> (ParameterID { IDs::learnMode, 1 }, "Learn", false));
     layout.add (std::make_unique<AudioParameterFloat> (ParameterID { IDs::renderLength, 1 }, "Export Len",
         NormalisableRange<float> (0.5f, 30.0f, 0.1f), 5.0f));
+
+    // Enhance-only live HF de-hiss (applied on the audio thread, tweakable in real time).
+    layout.add (std::make_unique<juce::AudioParameterBool> (ParameterID { IDs::hissFilter, 1 }, "Hiss Filter", false));
+    layout.add (std::make_unique<AudioParameterFloat> (ParameterID { IDs::hissFreq, 1 }, "Hiss Freq",
+        NormalisableRange<float> (3000.0f, 15000.0f, 1.0f, 0.5f), 9000.0f));
+    layout.add (std::make_unique<AudioParameterFloat> (ParameterID { IDs::hissQ, 1 }, "Hiss Q",
+        NormalisableRange<float> (0.3f, 2.0f, 0.01f), 0.707f));
+
+    // Enhance-only parametric EQ: 5 fully flexible bands (master enable = hissFilter above).
+    // Type order MUST match SessionState::EqType.
+    {
+        const juce::StringArray eqTypes { "Bell", "Low Shelf", "High Shelf", "High Pass", "Low Pass", "Notch" };
+        const int   defType[5] = { 3, 1, 0, 0, 4 };
+        const float defFreq[5] = { 40.0f, 150.0f, 1000.0f, 5000.0f, 9000.0f };
+        const float defQ   [5] = { 0.707f, 0.707f, 1.0f, 1.0f, 0.707f };
+        NormalisableRange<float> freqRange (20.0f, 20000.0f, 1.0f, 0.25f);
+        NormalisableRange<float> qRange    (0.1f, 10.0f, 0.001f, 0.3f);
+        for (int b = 1; b <= 5; ++b)
+        {
+            const int i = b - 1;
+            layout.add (std::make_unique<juce::AudioParameterBool> (
+                ParameterID { eqId (b, "On"), 1 }, "EQ " + juce::String (b) + " On", false));
+            layout.add (std::make_unique<AudioParameterChoice> (
+                ParameterID { eqId (b, "Type"), 1 }, "EQ " + juce::String (b) + " Type", eqTypes, defType[i]));
+            layout.add (std::make_unique<AudioParameterFloat> (
+                ParameterID { eqId (b, "Freq"), 1 }, "EQ " + juce::String (b) + " Freq", freqRange, defFreq[i]));
+            layout.add (std::make_unique<AudioParameterFloat> (
+                ParameterID { eqId (b, "Gain"), 1 }, "EQ " + juce::String (b) + " Gain",
+                NormalisableRange<float> (-18.0f, 18.0f, 0.1f), 0.0f));
+            layout.add (std::make_unique<AudioParameterFloat> (
+                ParameterID { eqId (b, "Q"), 1 }, "EQ " + juce::String (b) + " Q", qRange, defQ[i]));
+        }
+    }
 
     return layout;
 }

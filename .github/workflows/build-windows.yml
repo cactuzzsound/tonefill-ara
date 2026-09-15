@@ -1,0 +1,161 @@
+name: Build ToneFill - Windows
+
+# Builds the Windows VST3 (ARA-enabled) with CMake, then packages a signed-by-Inno installer .exe.
+# Trigger manually, or automatically on a version tag (v1.0.0, ...).
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Installer version (e.g. 1.0.0)"
+        required: false
+        default: "1.0.0"
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write   # softprops/action-gh-release creates/updates the release on tag builds
+
+jobs:
+  build:
+    runs-on: windows-2022   # has VS 2022 pre-installed and discoverable by the CMake VS generator
+
+    env:
+      # Pins matching the working macOS build. Bump together with the local checkout.
+      JUCE_TAG: "8.0.12"
+      ARA_SDK_COMMIT: "1ca0b0a"
+      # ARA_SDK's submodules, pinned to the exact commits the local build uses (JUCE's ARA
+      # client compiles ARA_Library/Utilities/*.cpp, so ARA_Library must be populated).
+      ARA_API_COMMIT: "b0905ce4428825909cf1477b4784a6ef7acc5e0d"
+      ARA_LIBRARY_COMMIT: "063a8f6a002b081650a4ffafcb074fd894309205"
+      LIBFVAD_COMMIT: "532ab66"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: ver
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "value=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=${{ github.event.inputs.version || '1.0.0' }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ── Dependencies (gitignored external/; fetched fresh, pinned) ──────────────
+      - name: Clone JUCE ${{ env.JUCE_TAG }}
+        run: git clone --branch ${{ env.JUCE_TAG }} --depth 1 https://github.com/juce-framework/JUCE.git C:/JUCE
+
+      - name: Clone ARA SDK (+ pinned ARA_API / ARA_Library submodules)
+        shell: bash
+        run: |
+          set -e
+          # The ARA_SDK superproject commit is irrelevant (we replace its ARA_API / ARA_Library
+          # submodule dirs). The pinned submodule commits are release-branch commits not on the
+          # default branch, so fetch them by SHA directly (GitHub allows fetch-by-SHA).
+          git clone https://github.com/Celemony/ARA_SDK.git external/ARA_SDK
+          rm -rf external/ARA_SDK/ARA_API external/ARA_SDK/ARA_Library
+          fetch_sha() {
+            local dir="$1" url="$2" sha="$3"
+            mkdir -p "$dir"
+            git -C "$dir" init -q
+            git -C "$dir" remote add origin "$url"
+            git -C "$dir" fetch -q --depth 1 origin "$sha"
+            git -C "$dir" checkout -q FETCH_HEAD
+          }
+          fetch_sha external/ARA_SDK/ARA_API     https://github.com/Celemony/ARA_API.git     "$ARA_API_COMMIT"
+          fetch_sha external/ARA_SDK/ARA_Library https://github.com/Celemony/ARA_Library.git "$ARA_LIBRARY_COMMIT"
+          test -f external/ARA_SDK/ARA_Library/Utilities/ARAChannelArrangement.cpp
+
+      - name: Clone libfvad
+        run: |
+          git clone https://github.com/dpirch/libfvad.git external/libfvad
+          git -C external/libfvad checkout ${{ env.LIBFVAD_COMMIT }}
+
+      # ── Configure + build (VST3 only; AU is macOS-only, AAX self-guards off) ────
+      - name: Configure (CMake, VS 2022 x64, ARA on)
+        run: >
+          cmake -B build -G "Visual Studio 17 2022" -A x64
+          -DJUCE_DIR=C:/JUCE
+          -DTONEFILL_ENABLE_ARA=ON
+          -DTONEFILL_ARA_SDK_DIR=${{ github.workspace }}/external/ARA_SDK
+          -DTONEFILL_BUILD_TESTS=OFF
+          -DTONEFILL_BUILD_TOOLS=OFF
+
+      - name: Build VST3 (Release)
+        run: cmake --build build --config Release --target ToneFillPlugin_VST3 --parallel
+
+      # ── Stage the built bundle where the Inno script expects it ─────────────────
+      - name: Stage VST3 + manual
+        shell: pwsh
+        run: |
+          $vst3 = Get-ChildItem -Path build -Recurse -Directory -Filter "ToneFill.vst3" |
+                  Where-Object { $_.FullName -match "VST3" } | Select-Object -First 1
+          if (-not $vst3) { throw "ToneFill.vst3 not found under build/" }
+          Write-Host "Found: $($vst3.FullName)"
+          New-Item -ItemType Directory -Force -Path installer\windows\stage | Out-Null
+          Copy-Item -Recurse -Force $vst3.FullName installer\windows\stage\ToneFill.vst3
+          Copy-Item -Force docs\manual.html installer\windows\stage\manual.html
+
+      # ── Stage the manually-signed AAX (produced via VirtualHere + physical iLok, uploaded to the
+      #    release as ToneFill-<ver>-Windows-AAX.zip). Optional: without it a VST3-only installer builds.
+      - name: Stage signed AAX (from the release, if present)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ver = "${{ steps.ver.outputs.value }}"
+          New-Item -ItemType Directory -Force -Path aax_dl | Out-Null
+          gh release download "v$ver" --repo $env:GITHUB_REPOSITORY -p "ToneFill-*-Windows-AAX.zip" -D aax_dl 2>$null
+          $zip = Get-ChildItem aax_dl -Filter *.zip -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($zip) {
+            Expand-Archive -Path $zip.FullName -DestinationPath installer\windows\stage -Force
+            if (Test-Path "installer\windows\stage\ToneFill.aaxplugin\Contents\x64\ToneFill.aaxplugin") {
+              Write-Host "Staged signed AAX from $($zip.Name)"
+            } else { Write-Host "WARNING: AAX zip extracted but the bundle layout is unexpected" }
+          } else {
+            Write-Host "No signed AAX in release v$ver - building a VST3-only installer."
+          }
+          # Best-effort staging: a missing release makes `gh release download` set a non-zero
+          # $LASTEXITCODE which would otherwise fail this step. Force success.
+          exit 0
+
+      # ── Inno Setup installer ────────────────────────────────────────────────────
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Compile installer
+        shell: pwsh
+        run: |
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          & $iscc "/DAppVersion=${{ steps.ver.outputs.value }}" "installer\windows\ToneFill.iss"
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed ($LASTEXITCODE)" }
+
+      - name: Also produce a plain ZIP of the VST3
+        shell: pwsh
+        run: |
+          Compress-Archive -Path installer\windows\stage\ToneFill.vst3 `
+            -DestinationPath "installer\windows\Output\ToneFill-${{ steps.ver.outputs.value }}-Windows-VST3.zip" -Force
+
+      # ── Upload ──────────────────────────────────────────────────────────────────
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: ToneFill-Windows-Installer
+          path: installer/windows/Output/ToneFill-*-Windows.exe
+
+      - name: Upload VST3 ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: ToneFill-Windows-VST3
+          path: installer/windows/Output/ToneFill-*-Windows-VST3.zip
+
+      - name: Attach to release (tag builds only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            installer/windows/Output/ToneFill-*-Windows.exe
+            installer/windows/Output/ToneFill-*-Windows-VST3.zip
+            aax_dl/ToneFill-*-Windows-AAX.zip

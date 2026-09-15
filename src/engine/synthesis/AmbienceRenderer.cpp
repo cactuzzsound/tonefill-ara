@@ -5,8 +5,10 @@
 #include "dsp/MacroEnvelope.h"
 #include "dsp/AmbienceConcat.h"
 #include "dsp/SpectralResynth.h"
+#include "dsp/PaulStretch.h"
 
 #include <juce_core/juce_core.h> // juce::ignoreUnused
+#include <juce_audio_basics/juce_audio_basics.h> // juce::IIRFilter
 #include <algorithm>
 #include <cmath>
 
@@ -211,28 +213,13 @@ void AmbienceRenderer::renderStatic (const model::AmbienceModel& model,
 void AmbienceRenderer::renderAmbience (const model::AmbienceModel& model,
                                       const model::RenderSettings& settings, Output& out) const
 {
-    // REAL-AUDIO grain cloud: overlap-add many real grains from the clean material so it sounds
-    // like THIS room (not synthesis), while dense overlap masks grain boundaries and averages out
-    // louder bits -> a steady, smoothly-blended bed. This is the Ambience mode.
     const bool haveClean = ! model.cleanAudioPerChannel.empty()
                            && ! model.cleanAudioPerChannel[0].empty();
     if (! haveClean) { renderCore (model, settings, out, /*useGranular*/ true); return; }
 
     const double sr = settings.targetSampleRate;
-    const int grainLen = juce::jmax (512, (int) (settings.fragmentMs * 0.001 * sr)); // Chunk Size
-    // Crossfade knob -> overlap density (2..8 grains overlapping). Higher = smoother.
-    const int density = juce::jlimit (2, 8, 2 + (int) std::lround ((settings.blendFrac - 0.05f) / 0.45f * 6.0f));
-    dsp::SeededRng master (settings.seed);
+    const int outN = (int) out.channels[0].size();
 
-    for (std::size_t ch = 0; ch < out.channels.size(); ++ch)
-    {
-        const auto& srcCh = model.cleanAudioPerChannel[juce::jmin (ch, model.cleanAudioPerChannel.size() - 1)];
-        auto rng = master.deriveSubStream (ch);
-        dsp::grainCloud (out.channels[ch].data(), (int) out.channels[ch].size(),
-                         srcCh.data(), (int) srcCh.size(), grainLen, density, rng, 12, settings.randomness);
-    }
-
-    // Normalise to the room's level with a SHARED gain (keeps the stereo balance).
     float targetRms = (! model.noisePerChannel.empty() && model.noisePerChannel[0].targetRms > 0.0f)
                           ? model.noisePerChannel[0].targetRms : 0.0f;
     if (targetRms <= 0.0f)
@@ -241,14 +228,86 @@ void AmbienceRenderer::renderAmbience (const model::AmbienceModel& model,
         double e = 0.0; for (float v : cc) e += (double) v * v;
         targetRms = (float) std::sqrt (e / (double) juce::jmax<std::size_t> (1, cc.size()));
     }
-    double e = 0.0; long long cnt = 0;
-    for (auto& chn : out.channels) { for (float v : chn) e += (double) v * v; cnt += (long long) chn.size(); }
-    const double rms = std::sqrt (e / (double) juce::jmax<long long> (1, cnt));
-    if (rms > 1.0e-9 && targetRms > 0.0f)
+    auto normaliseTo = [] (std::vector<std::vector<float>>& ch, float target)
     {
-        const float gn = (float) ((double) targetRms / rms);
-        for (auto& chn : out.channels) for (float& v : chn) v *= gn;
+        double e = 0.0; long long cnt = 0;
+        for (auto& c : ch) { for (float v : c) e += (double) v * v; cnt += (long long) c.size(); }
+        const double rms = std::sqrt (e / (double) juce::jmax<long long> (1, cnt));
+        if (rms > 1.0e-9 && target > 0.0f) { const float g = (float) ((double) target / rms); for (auto& c : ch) for (float& v : c) v *= g; }
+    };
+
+    if (settings.paulStretch)
+    {
+        // Enhance ON: smooth PaulStretch resynthesis of the (already stable, min-fill-selected)
+        // material. Smoothness = window size.
+        const int windowSamples = (int) ((0.05 + settings.randomness * 0.45) * sr); // 50..500 ms
+        // Feed PaulStretch the single longest UNJOINED run when available, so its slow pass never
+        // crosses a chunk boundary (those boundaries are the recurring hiss the user heard).
+        const auto& psSrc = (! model.stableRunPerChannel.empty() && ! model.stableRunPerChannel[0].empty())
+                                ? model.stableRunPerChannel : model.cleanAudioPerChannel;
+        dsp::paulStretch (out.channels, outN, psSrc, windowSamples, settings.seed);
+
+        // HF correction: PaulStretch can add high-frequency hiss the room tone didn't have. Match
+        // the output's high-band level to the SOURCE's with a high-shelf, so we remove only the
+        // ADDED highs (no dulling of the real tone).
+        auto highBandRatio = [&] (const std::vector<float>& x)
+        {
+            if (x.empty()) return 0.0;
+            std::vector<float> t (x);
+            juce::IIRFilter f; f.setCoefficients (juce::IIRCoefficients::makeHighPass (sr, 3000.0));
+            f.processSamples (t.data(), (int) t.size());
+            double eh = 0.0, eb = 0.0;
+            for (std::size_t i = 0; i < x.size(); ++i) { eh += (double) t[i] * t[i]; eb += (double) x[i] * x[i]; }
+            return std::sqrt (eh) / std::sqrt (juce::jmax (1.0e-18, eb));
+        };
+        const double srcRatio = highBandRatio (psSrc[0]);
+        const double outRatio = highBandRatio (out.channels[0]);
+        if (outRatio > srcRatio * 1.05 && outRatio > 1.0e-6)
+        {
+            const float gainDb = juce::jlimit (-18.0f, 0.0f, (float) (20.0 * std::log10 (juce::jmax (1.0e-6, srcRatio) / outRatio)));
+            const float g = std::pow (10.0f, gainDb / 20.0f);
+            for (auto& c : out.channels)
+            {
+                juce::IIRFilter f; f.setCoefficients (juce::IIRCoefficients::makeHighShelf (sr, 3000.0, 0.7071, g));
+                f.processSamples (c.data(), (int) c.size());
+            }
+        }
     }
+    else
+    {
+        // Enhance OFF: real-audio grain cloud shaped by Chunk Size / Crossfade.
+        const int grainLen = juce::jmax (512, (int) (settings.fragmentMs * 0.001 * sr));
+        const int density  = juce::jlimit (2, 8, 2 + (int) std::lround ((settings.blendFrac - 0.05f) / 0.45f * 6.0f));
+        // LP-500 running-RMS profile per channel: lets grainCloud keep the room's low end consistent
+        // across grain joins (a sub-join LF shift is the audible "different room" the friend flagged).
+        auto buildLfProfile = [sr] (const std::vector<float>& s)
+        {
+            const int len = (int) s.size();
+            std::vector<float> lpBuf (s);
+            juce::IIRFilter lp; lp.setCoefficients (juce::IIRCoefficients::makeLowPass (sr, 500.0));
+            lp.processSamples (lpBuf.data(), len);
+            std::vector<double> pre ((std::size_t) len + 1, 0.0);
+            for (int i = 0; i < len; ++i) pre[(std::size_t) i + 1] = pre[(std::size_t) i] + (double) lpBuf[(std::size_t) i] * lpBuf[(std::size_t) i];
+            const int win = juce::jmax (1, (int) (sr * 0.020));
+            std::vector<float> prof ((std::size_t) len, 0.0f);
+            for (int i = 0; i < len; ++i)
+            {
+                const int a = juce::jmax (0, i - win / 2), b = juce::jmin (len, i + win / 2 + 1);
+                prof[(std::size_t) i] = (float) std::sqrt ((pre[(std::size_t) b] - pre[(std::size_t) a]) / (double) juce::jmax (1, b - a));
+            }
+            return prof;
+        };
+        dsp::SeededRng master (settings.seed);
+        for (std::size_t ch = 0; ch < out.channels.size(); ++ch)
+        {
+            const auto& srcCh = model.cleanAudioPerChannel[juce::jmin (ch, model.cleanAudioPerChannel.size() - 1)];
+            auto rng = master.deriveSubStream (ch);
+            const auto lfp = buildLfProfile (srcCh);
+            dsp::grainCloud (out.channels[ch].data(), outN, srcCh.data(), (int) srcCh.size(), grainLen, density, rng, 12, 0.4f,
+                             lfp.data(), (int) lfp.size());
+        }
+    }
+    normaliseTo (out.channels, targetRms);
 }
 
 void AmbienceRenderer::renderHybrid (const model::AmbienceModel& model,

@@ -1,4 +1,5 @@
 #include "engine/analysis/AmbienceModelBuilder.h"
+#include "engine/analysis/CandidateFrameSelector.h"
 #include "dsp/Stft.h"
 #include "dsp/TonalDetect.h"
 #include "dsp/VoiceDetect.h"
@@ -18,7 +19,10 @@ namespace
 // is too little quiet material.
 juce::AudioBuffer<float> selectCleanAmbience (const juce::AudioBuffer<float>& src, double sr,
                                               float thresholdNorm, float speechReject,
-                                              std::vector<std::pair<int, int>>* rangesOut = nullptr)
+                                              float flatness, float minFillSeconds, bool trust,
+                                              std::vector<std::pair<int, int>>* rangesOut = nullptr,
+                                              float* availSecOut = nullptr,
+                                              float* roughnessOut = nullptr)
 {
     if (rangesOut != nullptr) rangesOut->clear();
     const int N = 2048, H = 512;
@@ -48,22 +52,47 @@ juce::AudioBuffer<float> selectCleanAmbience (const juce::AudioBuffer<float>& sr
         f.setCoefficients (juce::IIRCoefficients::makeHighPass (sr, 2000.0));
         f.processSamples (hpHi.getWritePointer (ch), len);
     }
+    // Low band (LP-500 Hz): room modes / HVAC / rumble - the primary perceptual fingerprint of the
+    // space. Tracked as a first-class band so off-LF-colour frames (passing car, door bass) are
+    // rejected by the colour cluster, and runs whose low end differs get glued harder (see An4).
+    juce::AudioBuffer<float> lp;
+    lp.makeCopyOf (src);
+    for (int ch = 0; ch < numCh; ++ch)
+    {
+        juce::IIRFilter f;
+        f.setCoefficients (juce::IIRCoefficients::makeLowPass (sr, 500.0));
+        f.processSamples (lp.getWritePointer (ch), len);
+    }
 
     const int numFrames = (len - N) / H + 1;
     std::vector<float> frameRms ((std::size_t) numFrames, 0.0f), midRms ((std::size_t) numFrames, 0.0f),
-                       hiRms ((std::size_t) numFrames, 0.0f);
+                       hiRms ((std::size_t) numFrames, 0.0f), lfRms ((std::size_t) numFrames, 0.0f);
     for (int f = 0; f < numFrames; ++f)
     {
-        float b = 0.0f, m = 0.0f, hi = 0.0f;
+        float b = 0.0f, m = 0.0f, hi = 0.0f, lo = 0.0f;
         for (int ch = 0; ch < numCh; ++ch)
         {
             b  = juce::jmax (b,  src.getRMSLevel (ch, f * H, N));
             m  = juce::jmax (m,  hp.getRMSLevel (ch, f * H, N));
             hi = juce::jmax (hi, hpHi.getRMSLevel (ch, f * H, N));
+            lo = juce::jmax (lo, lp.getRMSLevel (ch, f * H, N));
         }
         frameRms[(std::size_t) f] = b;
         midRms[(std::size_t) f]   = m;
         hiRms[(std::size_t) f]    = hi;
+        lfRms[(std::size_t) f]    = lo;
+    }
+
+    // Spectral tilt per frame (log band ratios). Its variation over time = spectral stationarity:
+    // steady for stationary noise (band RMS over 2048 samples is stable), rising when the timbre
+    // drifts (a filter sweep at constant level). Robust proxy for spectral flux without the noise
+    // jitter that raw frame-to-frame FFT flux suffers from.
+    std::vector<float> tiltA ((std::size_t) numFrames, 0.0f), tiltB ((std::size_t) numFrames, 0.0f);
+    for (int f = 0; f < numFrames; ++f)
+    {
+        const float eps = 1.0e-7f;
+        tiltA[(std::size_t) f] = std::log (midRms[(std::size_t) f] + eps) - std::log (frameRms[(std::size_t) f] + eps);
+        tiltB[(std::size_t) f] = std::log (hiRms[(std::size_t) f] + eps)  - std::log (midRms[(std::size_t) f] + eps);
     }
 
     auto floorOf = [numFrames] (std::vector<float> v)
@@ -144,7 +173,7 @@ juce::AudioBuffer<float> selectCleanAmbience (const juce::AudioBuffer<float>& sr
     if (srj > 0.05f)
     {
         const int   W = juce::jmax (8, (int) (1.0 * sr / H)); // ~1 s local floor window
-        const float eventMargin = 1.25f + (1.0f - srj) * 2.5f; // 1.25x (srj=1) .. 3.75x (srj~0)
+        const float eventMargin = 2.5f; // transient/event gate, INDEPENDENT of Voice Reject (was 1.25 .. 3.75)
         std::vector<char> event ((std::size_t) numFrames, 0);
         for (int f = 0; f < numFrames; ++f)
         {
@@ -164,33 +193,106 @@ juce::AudioBuffer<float> selectCleanAmbience (const juce::AudioBuffer<float>& sr
                 for (int d = -guard; d <= guard; ++d)
                     { const int k = f + d; if (k >= 0 && k < numFrames) speechD[(std::size_t) k] = 1; }
 
+    // --- Flatness (stationarity) gate --------------------------------------------------------
+    // Keep only frames sitting in a LOCALLY FLAT stretch: the level barely varies over a short
+    // window around them. This is what pulls out the most stable material, so the fill is built
+    // from long steady chunks and avoids audible crossfades / jumps. Strictness = Flatness.
+    std::vector<char> flat ((std::size_t) numFrames, 1);
+    {
+        const int fw = juce::jmax (3, (int) (0.4 * sr / H)); // ~0.4 s window
+        const float fl = juce::jlimit (0.0f, 1.0f, flatness);
+        auto localSd = [&] (const std::vector<float>& v, int a, int b)
+        {
+            double mean = 0.0; int cnt = 0;
+            for (int k = a; k <= b; ++k) { mean += v[(std::size_t) k]; ++cnt; }
+            mean /= juce::jmax (1, cnt);
+            double var = 0.0;
+            for (int k = a; k <= b; ++k) { const double d = v[(std::size_t) k] - mean; var += d * d; }
+            return std::make_pair (std::sqrt (var / juce::jmax (1, cnt)), mean);
+        };
+
+        // Per-frame local level CoV and spectral drift (how "un-flat" each frame's neighbourhood is).
+        std::vector<double> covF ((std::size_t) numFrames, 0.0), sdtF ((std::size_t) numFrames, 0.0);
+        for (int f = 0; f < numFrames; ++f)
+        {
+            const int a = juce::jmax (0, f - fw), b = juce::jmin (numFrames - 1, f + fw);
+            const auto lvl = localSd (frameRms, a, b);
+            covF[(std::size_t) f] = lvl.first / juce::jmax (1.0e-7, lvl.second);
+            sdtF[(std::size_t) f] = localSd (tiltA, a, b).first + localSd (tiltB, a, b).first;
+        }
+
+        // Rank frames by a combined "un-flatness" score and KEEP THE FLATTEST K%, where K shrinks as
+        // Flatness rises. Percentile-based instead of an absolute threshold, which gives two properties
+        // the knob needs: (1) nested by construction -- raising Flatness is always a strict SUBSET, so
+        // relaxing it only ever ADDS material (never swaps the selection to a different spot); and
+        // (2) never empty -- there is always a flattest K%, so high Flatness can't zero the selection
+        // ("0 chunks"). Each score component is normalised by its own median so level-CoV and spectral
+        // drift are comparable regardless of the material.
+        auto medianOf = [] (std::vector<double> v)
+        { if (v.empty()) return 1.0; std::sort (v.begin(), v.end()); return juce::jmax (1.0e-9, v[v.size() / 2]); };
+        const double medCov = medianOf (std::vector<double> (covF.begin(), covF.end()));
+        const double medSdt = medianOf (std::vector<double> (sdtF.begin(), sdtF.end()));
+        std::vector<double> score ((std::size_t) numFrames);
+        for (int f = 0; f < numFrames; ++f)
+            score[(std::size_t) f] = covF[(std::size_t) f] / medCov + sdtF[(std::size_t) f] / medSdt;
+        std::vector<double> sorted (score);
+        std::sort (sorted.begin(), sorted.end());
+        const double keepFrac = juce::jlimit (0.08, 0.90, 0.90 - (double) fl * 0.82); // fl=0 -> 90%, fl=1 -> 8%
+        const int idx = juce::jlimit (0, numFrames - 1, (int) std::llround (keepFrac * (numFrames - 1)));
+        const double scoreThresh = sorted[(std::size_t) idx];
+        for (int f = 0; f < numFrames; ++f)
+            flat[(std::size_t) f] = (score[(std::size_t) f] <= scoreThresh) ? 1 : 0;
+    }
+
+    // In Manual (trust) the LEVEL gate is skipped (you picked the regions), but Voice Reject and
+    // Flatness still apply so hand-picked selections are cleaned of speech / non-stationary bits.
     std::vector<char> frameClean ((std::size_t) numFrames, 0);
     for (int f = 0; f < numFrames; ++f)
-        frameClean[(std::size_t) f] = (frameRms[(std::size_t) f] < bThresh
-                                       && midRms[(std::size_t) f] < mThresh
-                                       && ! speechD[(std::size_t) f]) ? 1 : 0;
+    {
+        const bool levelOk = trust || (frameRms[(std::size_t) f] < bThresh && midRms[(std::size_t) f] < mThresh);
+        frameClean[(std::size_t) f] = (levelOk && ! speechD[(std::size_t) f] && flat[(std::size_t) f]) ? 1 : 0;
+    }
 
     // --- Spectral-shape consistency: keep only the dominant room-tone "colour" -----------------
     // Even quiet, non-speech frames can have a different character (a car passing outside, another
     // room tone). Concatenating mismatched colours sounds wrong. Build a robust centre (median of
     // the spectral tilt) over the clean candidates and drop outliers; the same gate is applied to
     // the top-up so added material matches too. Tighter as Dialog Reject rises.
-    auto tiltOf = [&] (int f, float& t1, float& t2)
+    auto tiltOf = [&] (int f, float& t1, float& t2, float& t3)
     {
         const float eps = 1.0e-7f;
         const float lb = std::log (frameRms[(std::size_t) f] + eps);
         const float lm = std::log (midRms[(std::size_t) f] + eps);
         const float lh = std::log (hiRms[(std::size_t) f] + eps);
+        const float ll = std::log (lfRms[(std::size_t) f] + eps);
         t1 = lm - lb;   // energy above 300 Hz vs broadband
         t2 = lh - lm;   // energy above 2 kHz vs mid
+        t3 = ll - lb;   // energy below 500 Hz vs broadband (room-mode / low-end colour)
     };
     bool  haveCluster = false;
-    float cT1 = 0.0f, cT2 = 0.0f, sT1 = 1.0f, sT2 = 1.0f;
-    const float clusterK = 3.5f - srj * 2.0f; // tolerance in MADs: 1.5 (srj=1) .. 3.5 (srj=0)
+    float cT1 = 0.0f, cT2 = 0.0f, cT3 = 0.0f, sT1 = 1.0f, sT2 = 1.0f, sT3 = 1.0f;
+    // Colour-cluster tolerance is INDEPENDENT of Voice Reject. Tying it to Voice Reject let that knob
+    // re-classify frames via the (median-relative) colour gate, so nudging Voice Reject swapped the
+    // selection non-monotonically. Fixed, moderate tolerance keeps Voice Reject to the speech gates.
+    const float clusterK = 2.5f; // tolerance in MADs (was 1.5 .. 3.5 via Voice Reject)
     {
-        std::vector<float> T1, T2;
+        // Reference = the MOST-CERTAIN room tone (flat, non-speech, quietest ~40% by level),
+        // computed INDEPENDENTLY of Clean Level. This anchors the "dominant colour" so raising
+        // Clean Level only ADDS material and never re-classifies previously-kept frames as
+        // outliers (which is what made the selection jump around before).
+        // Reference = the QUIETEST ~30% of frames (the room-tone floor), INDEPENDENT of Clean Level,
+        // Voice Reject AND Flatness. Tying it to any of those knobs let them shift the "dominant
+        // colour" and re-classify frames, which made the knobs behave backwards.
+        float refFloor = 1.0e9f;
+        {
+            std::vector<float> lv (frameRms.begin(), frameRms.end());
+            std::sort (lv.begin(), lv.end());
+            if (! lv.empty()) refFloor = lv[(std::size_t) (lv.size() * 3 / 10)];
+        }
+        std::vector<float> T1, T2, T3;
         for (int f = 0; f < numFrames; ++f)
-            if (frameClean[(std::size_t) f]) { float a, b; tiltOf (f, a, b); T1.push_back (a); T2.push_back (b); }
+            if (frameRms[(std::size_t) f] <= refFloor)
+            { float a, b, c; tiltOf (f, a, b, c); T1.push_back (a); T2.push_back (b); T3.push_back (c); }
         if (T1.size() >= 8)
         {
             auto median = [] (std::vector<float> v) { std::sort (v.begin(), v.end()); return v[v.size() / 2]; };
@@ -201,21 +303,47 @@ juce::AudioBuffer<float> selectCleanAmbience (const juce::AudioBuffer<float>& sr
                 std::sort (d.begin(), d.end());
                 return juce::jmax (1.0e-3f, d[d.size() / 2]);
             };
-            cT1 = median (T1); cT2 = median (T2);
-            sT1 = mad (T1, cT1); sT2 = mad (T2, cT2);
+            cT1 = median (T1); cT2 = median (T2); cT3 = median (T3);
+            sT1 = mad (T1, cT1); sT2 = mad (T2, cT2); sT3 = mad (T3, cT3);
             haveCluster = true;
         }
     }
     auto withinCluster = [&] (int f)
     {
         if (! haveCluster) return true;
-        float a, b; tiltOf (f, a, b);
-        const float dist = 0.5f * (std::fabs (a - cT1) / sT1 + std::fabs (b - cT2) / sT2);
+        float a, b, c; tiltOf (f, a, b, c);
+        const float dist = (std::fabs (a - cT1) / sT1 + std::fabs (b - cT2) / sT2 + std::fabs (c - cT3) / sT3) / 3.0f;
         return dist <= clusterK;
     };
     if (haveCluster)
         for (int f = 0; f < numFrames; ++f)
             if (frameClean[(std::size_t) f] && ! withinCluster (f)) frameClean[(std::size_t) f] = 0;
+
+    // Bridge SMALL NON-SPEECH holes so the gates don't shred an otherwise-clean stretch into tiny
+    // runs (which then fail Min Fill and waste most of the clean material). A hole is bridged only
+    // if it is short and contains no speech - so dialogue is never let back in.
+    {
+        const int maxHole = juce::jmax (1, (int) (0.15 * sr / H)); // ~150 ms
+        int f = 0;
+        while (f < numFrames)
+        {
+            if (frameClean[(std::size_t) f]) { ++f; continue; }
+            int g = f; bool hasSpeech = false;
+            while (g < numFrames && ! frameClean[(std::size_t) g]) { if (speechD[(std::size_t) g]) hasSpeech = true; ++g; }
+            const bool bounded = (f > 0 && frameClean[(std::size_t) (f - 1)]) && (g < numFrames);
+            if (bounded && ! hasSpeech && (g - f) <= maxHole)
+                for (int k = f; k < g; ++k) frameClean[(std::size_t) k] = 1;
+            f = g;
+        }
+    }
+
+    // Total clean material found (before the Min Fill run filter) - so the UI can show whether
+    // Min Fill is the limiter or the gates themselves are.
+    if (availSecOut != nullptr)
+    {
+        int cnt = 0; for (int f = 0; f < numFrames; ++f) if (frameClean[(std::size_t) f]) ++cnt;
+        *availSecOut = (float) (cnt * H / sr);
+    }
 
     auto buildRuns = [&] (int minRunLocal)
     {
@@ -241,33 +369,32 @@ juce::AudioBuffer<float> selectCleanAmbience (const juce::AudioBuffer<float>& sr
         return t;
     };
 
-    std::vector<std::pair<int, int>> runs = buildRuns (2); // include >= ~43 ms fragments
+    // Min Fill = HARD cutoff: use only contiguous stable runs at least this long, preferring the
+    // longest. Never pad with short fragments - they are exactly what causes the audible jumps.
+    auto allRuns = buildRuns (2); // every stable segment >= ~43 ms
+    auto runLenS = [&] (const std::pair<int, int>& r)
+    { return juce::jmin ((long long) ((r.second - r.first) * H + N), (long long) (len - r.first * H)); };
+
+    // Take ALL runs at least `floor` long (time-ordered), preferring long chunks. Min Fill sets the
+    // floor; if that leaves too little, lower the floor toward 0.5 s so we gather most of the
+    // available clean material instead of wasting it - but never below 0.5 s (avoids jumpy scraps).
+    auto pick = [&] (long long floor)
+    {
+        std::vector<std::pair<int, int>> v;
+        for (const auto& r : allRuns) if (runLenS (r) >= floor) v.push_back (r);
+        return v;
+    };
+    // Min Fill is a DIRECT floor - one path, no safety top-up (that broke monotonicity). Lower Min
+    // Fill -> more (and shorter) chunks + more total; higher -> fewer, longer chunks.
+    const long long floorS = (long long) (minFillSeconds * (float) sr);
+    std::vector<std::pair<int, int>> runs = pick (floorS);
+    // Guarantee at least the single longest run (some sources have no run that long).
+    if (runs.empty() && ! allRuns.empty())
+        runs.push_back (*std::max_element (allRuns.begin(), allRuns.end(),
+            [&] (const std::pair<int, int>& a, const std::pair<int, int>& b) { return runLenS (a) < runLenS (b); }));
     long long total = sumRuns (runs);
 
-    // Yield guarantee: a long, talky source must not collapse to ~1 s of room tone. If the strict
-    // pass found little, TOP UP with the quietest NON-SPEECH frames (dialog stays excluded via
-    // speechD) until we reach a useful amount, then rebuild allowing short runs. The quietest
-    // non-speech frames ARE the best available room tone (e.g. car interior between words).
-    const long long target = (long long) (8.0 * sr);
-    if (total < target)
-    {
-        std::vector<int> cand;
-        for (int f = 0; f < numFrames; ++f)
-            if (! frameClean[(std::size_t) f] && ! speechD[(std::size_t) f] && withinCluster (f)) cand.push_back (f);
-        std::sort (cand.begin(), cand.end(),
-                   [&] (int a, int b) { return frameRms[(std::size_t) a] < frameRms[(std::size_t) b]; });
-        long long acc = total;
-        for (int f : cand)
-        {
-            if (acc >= target) break;
-            frameClean[(std::size_t) f] = 1;
-            acc += H;
-        }
-        runs = buildRuns (1);
-        total = sumRuns (runs);
-    }
-
-    // Last resort, only if the source is essentially ALL speech: use the whole buffer.
+    // Last resort, only if there is essentially no stable material at all.
     if (runs.empty() || total < (long long) (0.05 * sr))
     {
         juce::AudioBuffer<float> c; c.makeCopyOf (src); return c;
@@ -277,10 +404,40 @@ juce::AudioBuffer<float> selectCleanAmbience (const juce::AudioBuffer<float>& sr
         for (const auto& r : runs)
             rangesOut->push_back ({ r.first * H, juce::jmin (r.second * H + N, len) });
 
-    const int joinXf = (int) (0.02 * sr); // 20 ms join crossfade
+    // An4 (adaptive join crossfade): the two runs meeting at a join usually differ in level and
+    // colour. Measure that mismatch in dB from the per-frame bands (broadband/mid/high) at the
+    // previous run's tail vs the next run's head, and stretch the crossfade from 20 ms (well matched)
+    // up to 120 ms (>=6 dB apart) so mismatched joins are glued harder. Runs are in frame coords, so
+    // this reuses the analysis features - no extra FFT. An5: the mean mismatch is the "seam risk".
+    auto bandDbAt = [&] (int frame, float& lb, float& lm, float& lh, float& ll)
+    {
+        const int a = juce::jlimit (0, numFrames - 1, frame - 2);
+        const int b = juce::jlimit (0, numFrames - 1, frame + 2);
+        double sb = 0.0, sm = 0.0, sh = 0.0, sl = 0.0; int c = 0;
+        for (int k = a; k <= b; ++k)
+        { sb += frameRms[(std::size_t) k]; sm += midRms[(std::size_t) k]; sh += hiRms[(std::size_t) k]; sl += lfRms[(std::size_t) k]; ++c; }
+        const double inv = 1.0 / (double) juce::jmax (1, c);
+        lb = 20.0f * std::log10 ((float) (sb * inv) + 1.0e-9f);
+        lm = 20.0f * std::log10 ((float) (sm * inv) + 1.0e-9f);
+        lh = 20.0f * std::log10 ((float) (sh * inv) + 1.0e-9f);
+        ll = 20.0f * std::log10 ((float) (sl * inv) + 1.0e-9f);
+    };
+    auto joinMismatchDb = [&] (const std::pair<int, int>& prev, const std::pair<int, int>& next)
+    {
+        float pb, pm, ph, pl, nb, nm, nh, nl;
+        bandDbAt (prev.second - 1, pb, pm, ph, pl);
+        bandDbAt (next.first,      nb, nm, nh, nl);
+        const float colour = std::sqrt (((pb - nb) * (pb - nb) + (pm - nm) * (pm - nm) + (ph - nh) * (ph - nh)) / 3.0f);
+        // Low end matters most perceptually: a pure <500 Hz shift reads as "different room". Weight
+        // it 2x so even an LF-only mismatch stretches the crossfade to the max (3 dB LF -> 120 ms).
+        const float lfDb = std::fabs (pl - nl);
+        return juce::jmax (colour, 2.0f * lfDb);
+    };
+
     const float halfPi = 1.5707963267948966f;
     juce::AudioBuffer<float> clean (numCh, (int) total);
     int w = 0;
+    double roughAcc = 0.0; int roughCnt = 0;
     for (std::size_t ri = 0; ri < runs.size(); ++ri)
     {
         const int s = runs[ri].first * H;
@@ -292,6 +449,10 @@ juce::AudioBuffer<float> selectCleanAmbience (const juce::AudioBuffer<float>& sr
         }
         else
         {
+            const float mismatchDb = joinMismatchDb (runs[ri - 1], runs[ri]);
+            roughAcc += mismatchDb; ++roughCnt;
+            const float t = juce::jlimit (0.0f, 1.0f, mismatchDb / 6.0f);
+            const int joinXf = (int) ((0.020f + t * 0.100f) * (float) sr); // 20..120 ms
             const int ov = juce::jmin (joinXf, juce::jmin (span, w));
             for (int ch = 0; ch < numCh; ++ch)
             {
@@ -308,6 +469,8 @@ juce::AudioBuffer<float> selectCleanAmbience (const juce::AudioBuffer<float>& sr
         }
     }
     clean.setSize (numCh, w, true);
+    if (roughnessOut != nullptr)
+        *roughnessOut = roughCnt > 0 ? (float) (roughAcc / (double) roughCnt) : 0.0f;
     return clean;
 }
 } // namespace
@@ -342,13 +505,34 @@ AmbienceModelBuilder::assemble (const AnalysisContext& ctx, std::atomic<bool>& c
     // Learn ONLY from clean ambience (quiet gaps), not the dialogue. Everything below
     // (RMS, LTAS, tonal, grains) uses this filtered material.
     std::vector<std::pair<int, int>> cleanRanges;
+    float availSec = 0.0f, roughnessDb = 0.0f;
     juce::AudioBuffer<float> learn;
-    if (ctx.useManualSelection)
-        learn.makeCopyOf (raw); // raw already holds ONLY the user-selected material
+    if (ctx.statisticalSelection && ! ctx.useManualSelection)
+    {
+        // AnalysisModel::Statistical (Design §E) - weighted per-frame scoring. Same output contract
+        // as selectCleanAmbience, so everything downstream is unchanged. Manual mode still uses the
+        // Classic trusted path (the user-selected region is already the material).
+        CandidateFrameSelector::Params sp;
+        sp.cleanThreshold = ctx.cleanThreshold;
+        sp.speechReject   = ctx.speechReject;
+        sp.flatness       = ctx.flatness;
+        sp.minFillSeconds = ctx.minFillSeconds;
+        learn = CandidateFrameSelector().selectLearnBuffer (raw, ctx.analysisSampleRate, sp,
+                                                            &cleanRanges, &availSec, &roughnessDb);
+    }
     else
-        learn = selectCleanAmbience (raw, ctx.analysisSampleRate, ctx.cleanThreshold, ctx.speechReject, &cleanRanges);
+    {
+        learn = selectCleanAmbience (raw, ctx.analysisSampleRate, ctx.cleanThreshold, ctx.speechReject,
+                                     ctx.flatness, ctx.minFillSeconds, /*trust=*/ ctx.useManualSelection,
+                                     &cleanRanges, &availSec, &roughnessDb);
+    }
     const juce::AudioBuffer<float>& src = learn;
     model->cleanRanges = std::move (cleanRanges);
+    model->availableCleanSeconds = availSec;
+    model->joinRoughnessDb = roughnessDb;
+    // An5: flag seam risk when joins are spectrally far apart (rough) - the UI surfaces it so the
+    // user knows to raise Min Fill / widen selection before trusting the fill.
+    model->loopRiskHigh = (roughnessDb > 4.0f);
 
     // Robust stationary-noise spectrum -> drives the constant spectral re-synthesis bed.
     model->noiseSpectrum = dsp::estimateNoiseSpectrum (learn, 2048, 512);
@@ -358,6 +542,22 @@ AmbienceModelBuilder::assemble (const AnalysisContext& ctx, std::atomic<bool>& c
     for (int ch = 0; ch < learn.getNumChannels(); ++ch)
         model->cleanAudioPerChannel[(std::size_t) ch].assign (learn.getReadPointer (ch),
                                                               learn.getReadPointer (ch) + learn.getNumSamples());
+
+    // Longest single clean run (raw from the source, no joins) for PaulStretch / Enhance.
+    if (! model->cleanRanges.empty())
+    {
+        const auto longest = *std::max_element (model->cleanRanges.begin(), model->cleanRanges.end(),
+            [] (const std::pair<int, int>& a, const std::pair<int, int>& b) { return (a.second - a.first) < (b.second - b.first); });
+        const int rs = juce::jlimit (0, raw.getNumSamples(), longest.first);
+        const int re = juce::jlimit (rs, raw.getNumSamples(), longest.second);
+        const int rlen = re - rs;
+        if (rlen > 256)
+        {
+            model->stableRunPerChannel.resize ((std::size_t) raw.getNumChannels());
+            for (int ch = 0; ch < raw.getNumChannels(); ++ch)
+                model->stableRunPerChannel[(std::size_t) ch].assign (raw.getReadPointer (ch) + rs, raw.getReadPointer (ch) + re);
+        }
+    }
     // LTAS (TF-501b): average magnitude spectrum over the learn material -> noise-bed shape.
     dsp::StftConfig stftCfg; // 2048 / 512 / Hann
     dsp::Stft stft (stftCfg);

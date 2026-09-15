@@ -10,6 +10,7 @@
 
 #include "plugin/SessionState.h"
 
+#include <array>
 #include <atomic>
 #include <map>
 #include <memory>
@@ -51,8 +52,9 @@ public:
 
     using juce::ARAPlaybackRenderer::processBlock;
 
-    // Wired by the owning PluginProcessor in didBindToARA(): the per-instance UI bridge this
-    // renderer's worker publishes to. Must be set before prepareToPlay starts the worker.
+    // Wired by the owning PluginProcessor in didBindToARA(). Only a fallback: prepareToPlay
+    // replaces it with the state the document controller shares for our audio source, because in
+    // most hosts the editor lives on a DIFFERENT instance than this renderer.
     void setSessionState (std::shared_ptr<plugin::SessionState> s) { state_ = std::move (s); }
 
 private:
@@ -65,7 +67,8 @@ private:
     class FillWorker; // background analyze+render thread (defined in .cpp)
 
     ProcessingLockInterface& lockInterface;
-    std::shared_ptr<plugin::SessionState> state_; // per-instance UI bridge (set before play)
+    ARA::PlugIn::DocumentController* documentController_ = nullptr; // to reach the shared state
+    std::shared_ptr<plugin::SessionState> state_; // UI bridge, shared per audio source
 
     double sampleRate = 48000.0;
     int    numChannels = 0;
@@ -79,7 +82,43 @@ private:
     std::atomic<bool>               analysisStarted { false };
     std::unique_ptr<FillWorker>     worker;
 
+    // Enhance-only parametric EQ: per-channel chain of kEqBands biquads on the audio thread. Coeffs
+    // are rebuilt only when a band's settings change (cheap; not per sample).
+    std::vector<std::array<juce::IIRFilter, kEqBands>> eqFilters_; // [channel][band]
+    struct EqCache { bool on = false; int type = -1; float freq = -1.0f, gain = -999.0f, q = -1.0f; };
+    std::array<EqCache, kEqBands> eqCache_ {};
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ToneFillPlaybackRenderer)
+};
+
+// ARA editor renderer: replaces the region with the SAME synthesized fill during audition (e.g.
+// Nuendo/Cubase playing from the Sample Editor). Without this, JUCE's default editor renderer lets
+// the source pass through unaltered, so those hosts play the original clip instead of the room tone.
+// It does no analysis of its own -- it reads the loop the playback renderer's worker published into
+// the shared per-source SessionState.
+class ToneFillEditorRenderer : public juce::ARAEditorRenderer
+{
+public:
+    ToneFillEditorRenderer (ARA::PlugIn::DocumentController* dc, ProcessingLockInterface& lock);
+
+    void prepareToPlay (double sampleRate, int maximumSamplesPerBlock, int numChannels,
+                        juce::AudioProcessor::ProcessingPrecision,
+                        AlwaysNonRealtime alwaysNonRealtime) override;
+    void releaseResources() override {}
+
+    bool processBlock (juce::AudioBuffer<float>& buffer,
+                       juce::AudioProcessor::Realtime realtime,
+                       const juce::AudioPlayHead::PositionInfo& positionInfo) noexcept override;
+
+    using juce::ARAEditorRenderer::processBlock;
+
+private:
+    ProcessingLockInterface& lockInterface;
+    ARA::PlugIn::DocumentController* documentController_ = nullptr;
+    std::shared_ptr<plugin::SessionState> state_; // shared per audio source (same loop as playback)
+    double sampleRate = 48000.0;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ToneFillEditorRenderer)
 };
 } // namespace tonefill::plugin::ara
 

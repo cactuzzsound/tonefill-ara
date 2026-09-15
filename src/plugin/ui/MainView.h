@@ -12,9 +12,14 @@
 #include <vector>
 
 namespace tonefill::plugin { class PluginProcessor; }
+namespace tonefill::licensing { class ActivationComponent; }
 
 namespace tonefill::plugin::ui
 {
+class WaveformWindow;
+class SpectralEditorWindow;
+class EqView;
+
 class MainView : public juce::Component, private juce::Timer
 {
 public:
@@ -27,56 +32,82 @@ public:
     void mouseDrag (const juce::MouseEvent&) override;
     void mouseUp (const juce::MouseEvent&) override;
 
+    struct Knob { juce::Slider slider; juce::Label label; };
+
 private:
     void timerCallback() override;
     void exportWav();
-    void setMode (int modeIndex);
-    void updateEmphasis (int modeIndex);
+    void updateEmphasis();
     void pushSelections();                 // selections_ -> SessionState (source-sample ranges)
+    void loadParamsFromState (SessionState& ss); // clip switch: SessionState -> knobs (per-clip params)
     int  xToSample (int x) const;          // waveform x -> source sample
     float sampleToX (int sample) const;    // source sample -> waveform x
-    void drawKnobIcon (juce::Graphics&, juce::Rectangle<float> box, int icon, juce::Colour) const;
+    void drawGroupIcon (juce::Graphics&, juce::Rectangle<float> box, int icon, juce::Colour) const;
+    void openWaveformWindow();
+    void openSpectralWindow();
+    void showActivation (bool blocking); // overlay the license dialog (blocking = trial expired)
 
     PluginProcessor& processor_;
     ToneFillLookAndFeel lnf_;
-    juce::TooltipWindow tooltip_ { this, 600 }; // shows hover help for every control
+    juce::TooltipWindow tooltip_ { this, 600 };
 
     juce::Label titleLbl_, subLbl_;
-    std::array<juce::TextButton, 2> tabs_;             // display order: Ambience, Complex
-    static constexpr int tabMode_[2] = { 3, 2 };       // -> engine mode index (Ambience, Complex)
-    juce::Label modeDesc_;                             // one-line explanation of the active mode
 
-    // Per-knob glyph drawn at the card's top-left (matches the reference UI).
-    enum Icon { IcSparkle, IcDialog, IcTarget, IcCross, IcShuffle, IcSine, IcWave, IcSliders, IcClock };
-    struct Knob { juce::Slider slider; juce::Label label; int icon = 0; };
-    Knob threshold_, speech_, fragment_, blend_, variation_, tonal_, movement_, gain_, length_;
+    Knob threshold_, speech_, blend_, variation_, minFill_, flatness_, bands_, gain_, length_;
 
-    // Card + value-box rectangles for the 9 knobs, rebuilt in resized(), drawn in paint().
-    struct CardLayout { juce::Rectangle<int> card, value; int icon; };
-    std::vector<CardLayout> cards_;
+    // Value-pill rectangles for the 9 knobs, rebuilt in resized(), drawn in paint().
+    std::vector<juce::Rectangle<int>> valuePills_;
+
+    // Three group cards (Detection / Structure / Texture): background + header rects.
+    std::array<juce::Rectangle<int>, 3> groupCard_;
+    enum Gicon { GiDetect, GiStruct, GiTexture };
 
     juce::TextButton regenBtn_ { "Regenerate" }, exportBtn_ { "Export WAV" };
-    juce::TextButton autoBtn_ { "Auto" }, manualBtn_ { "Manual" }; // learn-source mode toggle
-    juce::TextButton wholeBtn_ { "Full" };                         // analyze whole item vs first 4 min
-    juce::TextButton learnBtn_ { "Learn" };                        // AudioSuite: learn vs generate
+    juce::TextButton autoBtn_ { "Auto" }, manualBtn_ { "Manual" };       // learn-source mode
+    juce::TextButton enhanceBtn_ { "Enhance" }, wholeBtn_ { "Full" };    // processing group
+    juce::TextButton classicBtn_ { "Classic" }, expBtn_ { "Experimental" }; // selection engine
+    juce::TextButton spectralBtn_ { "Spectral" };                        // per-band mosaic synthesis
+    juce::TextButton advBtn_ { "Advanced" };                             // Spectral: choose band range
+    juce::TextButton expandBtn_ { "Expand" };                            // open large waveform window
+    juce::TextButton bypassBtn_ { "Bypass" };                            // A/B: play source vs room tone
+    juce::TextButton demoBadge_ { "Activate" };                          // shown only while unactivated
+    std::unique_ptr<tonefill::licensing::ActivationComponent> activation_;
 
-    // Loudness normalize: bake the fill to a dBFS-peak or LUFS target (disables the Output knob).
+    // Loudness normalize. normTarget_ is the hidden parameter-bound backing; the value is presented
+    // as a −/value/+ stepper (normMinus_ / normValueLbl_ / normPlus_).
     juce::TextButton normBtn_ { "Normalize" };
     juce::Slider     normTarget_;
+    juce::TextButton normMinus_ { "" }, normPlus_ { "" };
+    juce::Label      normValueLbl_;
     juce::ComboBox   normUnit_;
     juce::Label      normReadout_;
+
+    // Enhance-only parametric EQ (master toggle in the action bar; graph editor expands below it).
+    juce::TextButton hissBtn_ { "EQ" };
+    std::unique_ptr<EqView> eqView_;
+
+    // Rotating tip.
+    juce::Label tipLbl_;
+    std::array<juce::String, 11> tips_;
+    int tipIdx_ = 0, tipTick_ = 0;
 
     using SA  = juce::AudioProcessorValueTreeState::SliderAttachment;
     using BA  = juce::AudioProcessorValueTreeState::ButtonAttachment;
     using CBA = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
-    std::unique_ptr<SA> thA_, spA_, frA_, blA_, vaA_, toA_, moA_, gaA_, leA_, ntA_;
-    std::unique_ptr<BA>  neA_, wfA_, lrA_;
+    std::unique_ptr<SA> thA_, spA_, blA_, vaA_, mfA_, flA_, sbA_, gaA_, leA_, ntA_;
+    std::unique_ptr<BA>  neA_, wfA_, enA_, hbA_, byA_, adA_;
     std::unique_ptr<CBA> nuA_;
 
+    std::unique_ptr<WaveformWindow> waveWin_;
+    std::unique_ptr<SpectralEditorWindow> specWin_;
     std::unique_ptr<juce::FileChooser> chooser_;
+    const SessionState* shownState_ = nullptr; // detect the editor re-pointing to another clip
+    int  loadedEpoch_ = -1;                    // paramsEpoch last loaded; reload if a restore bumps it
+
     SessionState::WaveData wave_;
     float meterDb_ = -120.0f;
-    juce::Rectangle<int> waveArea_, meterArea_;
+    juce::Rectangle<int> headerGroups_, actionCard_, bottomCard_, tipCard_;
+    juce::Rectangle<int> waveArea_, waveRuler_, dataArea_, meterArea_;
 
     // Manual learn-region selection (source-sample coordinates).
     bool manualMode_ = false;

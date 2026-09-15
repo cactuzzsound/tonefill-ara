@@ -9,7 +9,12 @@
 #include "engine/analysis/AnalysisSession.h"
 #include "engine/synthesis/AmbienceRenderer.h"
 #include "engine/model/RenderSettings.h"
+#include "dsp/SpectralBands.h"
+#include "dsp/AutoBands.h"
+#include "dsp/EqCoefficients.h"
+#include "licensing/LicenseManager.h"
 #include "plugin/SessionState.h"
+#include "plugin/ara/DocumentControllerImpl.h"
 
 #include <algorithm>
 #include <cmath>
@@ -28,6 +33,45 @@ void araLog (const juce::String& msg)
         .getChildFile ("tonefill_ara.log")
         .appendText (juce::Time::getCurrentTime().toString (false, true, true, true) + "  " + msg + "\n");
 }
+
+namespace
+{
+// Bypass A/B: write the analysed SOURCE into the region range (not looped) instead of the fill, so
+// the user can compare the room tone against the original. Shared by both renderers.
+void tileSourcePreview (juce::AudioBuffer<float>& buffer, double sampleRate,
+                        const std::vector<juce::ARAPlaybackRegion*>& regions,
+                        const juce::AudioPlayHead::PositionInfo& positionInfo,
+                        const plugin::SessionState::FillBuffer& src)
+{
+    if (src.empty() || src[0].empty()) return;
+    const long long len = (long long) src[0].size();
+    const auto numSamples = buffer.getNumSamples();
+    const auto timeInSamples = positionInfo.getTimeInSamples().orFallback (0);
+    const auto blockRange = juce::Range<juce::int64>::withStartAndLength (timeInSamples, (juce::int64) numSamples);
+
+    for (const auto region : regions)
+    {
+        const auto songRange = region->getSampleRange (sampleRate, juce::ARAPlaybackRegion::IncludeHeadAndTail::no);
+        const auto renderRange = blockRange.getIntersectionWith (songRange);
+        if (renderRange.isEmpty()) continue;
+
+        const int startInBuffer = (int) (renderRange.getStart() - blockRange.getStart());
+        const int count = (int) renderRange.getLength();
+        const auto regionStart = songRange.getStart();
+
+        for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+        {
+            const auto& srcCh = src[(std::size_t) juce::jmin (ch, (int) src.size() - 1)];
+            auto* dst = buffer.getWritePointer (ch);
+            for (int i = 0; i < count; ++i)
+            {
+                const long long spos = renderRange.getStart() + i - regionStart; // aligned, not looped
+                if (spos >= 0 && spos < len) dst[startInBuffer + i] = srcCh[(std::size_t) spos];
+            }
+        }
+    }
+}
+} // namespace
 
 // Background one-shot: read the ARA source, analyze, render a loopable fill, publish it.
 class ToneFillPlaybackRenderer::FillWorker : public juce::Thread
@@ -62,13 +106,32 @@ public:
 
         auto readSource = [&] (double capSec) -> bool
         {
-            const int want = (int) juce::jmin (total, (long long) (capSec * sampleRate));
+            // Quality-first: analyse as much of the source as fits a memory budget rather than a short
+            // fixed window -- more material means better clean-tone selection on long takes. Degrades
+            // gracefully (halve on allocation failure) instead of aborting on a huge file.
+            // The ARA source may run at a different sample rate than the project/playback rate (e.g. a
+            // 96 kHz file in a 48 kHz session). ARAAudioSourceReader reads at the FILE'S native rate,
+            // so we read here in native samples and resample to the playback rate below -- otherwise
+            // the fill plays at the wrong speed (96 k read as 48 k = half speed / octave down).
+            const double nativeSr = source->getSampleRate() > 0.0 ? source->getSampleRate() : sampleRate;
+            const long long kByteBudget    = 1500LL * 1024 * 1024;                 // ~1.5 GB for src + learn
+            const long long bytesPerSample = (long long) juce::jmax (1, channels) * 4 * 2;
+            const long long maxByMem       = juce::jmax ((long long) (nativeSr * 5), kByteBudget / bytesPerSample);
+            long long want = juce::jmin (total, (long long) (capSec * nativeSr));
+            want = juce::jmin (want, maxByMem);
             if (want <= 0) return false;
-            try { src.setSize (channels, want); }
-            catch (...) { araLog ("readSource: allocation failed for " + juce::String (want) + " samples"); return false; }
-            n = want;
+
+            bool alloc = false;
+            for (int tries = 0; tries < 8 && want > (long long) (nativeSr * 5); ++tries)
+            {
+                try { src.setSize (channels, (int) want); alloc = true; break; }
+                catch (...) { araLog ("readSource: alloc failed at " + juce::String (want) + ", halving"); want /= 2; }
+            }
+            if (! alloc) { try { src.setSize (channels, (int) juce::jmax ((long long) 1, want)); } catch (...) { return false; } }
+            n = (int) want;
             araLog ("readSource: total=" + juce::String (total) + " read=" + juce::String (n)
-                    + " ch=" + juce::String (channels) + " sr=" + juce::String (sampleRate) + " cap=" + juce::String (capSec));
+                    + " ch=" + juce::String (channels) + " sr=" + juce::String (sampleRate)
+                    + " nativeSr=" + juce::String (source->getSampleRate()) + " cap=" + juce::String (capSec));
 
             bool gotAudio = false;
             for (int attempt = 0; attempt < 30 && ! threadShouldExit(); ++attempt)
@@ -89,6 +152,29 @@ public:
             }
             if (! gotAudio) return false;
 
+            // Resample the native-rate source to the playback rate when they differ, so analysis and
+            // the synthesized fill are at the project rate (fixes half-speed on e.g. a 96 kHz file in
+            // a 48 kHz session). Lagrange interpolation: fine for room tone (little energy near Nyquist).
+            if (std::abs (nativeSr - sampleRate) > 1.0)
+            {
+                const double ratio = nativeSr / sampleRate;           // input samples consumed per output sample
+                const int nOut = (int) std::llround ((double) n / ratio);
+                if (nOut > 0)
+                {
+                    juce::AudioBuffer<float> rs (channels, nOut);
+                    for (int c = 0; c < channels; ++c)
+                    {
+                        juce::LagrangeInterpolator interp;
+                        interp.reset();
+                        interp.process (ratio, src.getReadPointer (c), rs.getWritePointer (c), nOut);
+                    }
+                    src.makeCopyOf (rs);
+                    n = nOut;
+                    araLog ("readSource: resampled nativeSr=" + juce::String (nativeSr) + " -> playbackSr="
+                            + juce::String (sampleRate) + " => " + juce::String (n) + " samples");
+                }
+            }
+
             // Mono detection: near-identical channels -> render one correlated channel.
             effCh = channels;
             if (channels >= 2)
@@ -102,12 +188,23 @@ public:
             learnSrc.setSize (effCh, n);
             for (int ch = 0; ch < effCh; ++ch) learnSrc.copyFrom (ch, 0, src, ch, 0, n);
             ss.sourceSamples.store (n);
+            ss.sourceSampleRate.store (sampleRate);
+
+            // Keep a copy of the source for the Bypass A/B monitor.
+            {
+                auto sp = std::make_shared<tonefill::plugin::SessionState::FillBuffer>();
+                sp->resize ((std::size_t) effCh);
+                for (int ch = 0; ch < effCh; ++ch)
+                    (*sp)[(std::size_t) ch].assign (learnSrc.getReadPointer (ch), learnSrc.getReadPointer (ch) + n);
+                ss.setSourcePreview (std::move (sp), sampleRate);
+            }
             araLog ("readSource: effCh=" + juce::String (effCh) + " (src ch=" + juce::String (channels) + ")");
             return true;
         };
 
         bool lastWhole = ss.wholeFile.load();
-        if (! readSource (lastWhole ? 900.0 : 240.0) || threadShouldExit()) return;
+        // Default = first 10 min (was 4); Full = the whole item, memory-bounded. Quality over speed.
+        if (! readSource (lastWhole ? 1.0e9 : 600.0) || threadShouldExit()) return;
 
         tonefill::core::DiagnosticsLogger diag;
         engine::analysis::AnalysisSession session (diag);
@@ -115,35 +212,44 @@ public:
 
         // (Re)analyze with the current Threshold; updates the UI status. Re-runs when Threshold
         // moves (it changes WHICH source material is learned, so it needs fresh analysis).
-        auto analyze = [&] (float threshold, const juce::AudioBuffer<float>& learnInput, bool useManual)
+        auto analyze = [&] (float threshold, const juce::AudioBuffer<float>& learnInput, bool useManual,
+                            bool updateStatus = true)
             -> engine::model::AmbienceModelPtr
         {
             engine::analysis::AnalysisContext ctx;
             ctx.leftContext.makeCopyOf (learnInput);
             ctx.rightContext.makeCopyOf (learnInput);
             ctx.analysisSampleRate = sampleRate;
-            ctx.numChannels = effCh;
+            ctx.numChannels = juce::jmax (1, learnInput.getNumChannels()); // 1 for a spectral band pass
             ctx.leftEnabled = true;
             ctx.useManualSelection = useManual;
             ctx.cleanThreshold = threshold;
             ctx.speechReject = ss.speechReject.load();
+            ctx.flatness = ss.flatness.load();
+            ctx.minFillSeconds = ss.minFill.load();
+            ctx.statisticalSelection = ss.statisticalMode.load();
             ctx.sourceContentHash = (std::uint64_t) n;
-            ss.phase.store (1);
+            if (updateStatus) ss.phase.store (1);
             auto r = session.run (ctx, cancel);
-            if (! r.ok()) { ss.phase.store (0); return nullptr; }
+            if (! r.ok()) { if (updateStatus) ss.phase.store (0); return nullptr; }
             const auto m = r.value();
+            if (! updateStatus) return m; // per-band spectral pass: audio only, don't touch the UI
             const int nP = m->tonalPerChannel.empty() ? 0 : (int) m->tonalPerChannel[0].partials.size();
             const float lvl = (m->noisePerChannel.empty() || m->noisePerChannel[0].targetRms <= 0.0f)
                                   ? -120.0f : 20.0f * std::log10 (m->noisePerChannel[0].targetRms);
             ss.numPartials.store (nP);
             ss.learnSeconds.store (m->learnMaterialSeconds);
+            ss.cleanChunks.store ((int) m->cleanRanges.size());
+            ss.availSeconds.store (m->availableCleanSeconds);
+            ss.seamRiskDb.store (m->joinRoughnessDb);
             ss.levelDb.store (lvl);
             ss.phase.store (2);
             araLog ("analyze: thr=" + juce::String (threshold) + " partials=" + juce::String (nP)
                     + " learnSec=" + juce::String (m->learnMaterialSeconds) + " levelDb=" + juce::String (lvl));
 
-            // Waveform for the UI: peak per bin + an (approximate, level-based) clean flag.
-            const int bins = 220;
+            // Waveform for the UI: peak per bin + clean flag. Higher resolution now so the large
+            // waveform window can zoom in and still show detail.
+            const int bins = 2000;
             tonefill::plugin::SessionState::WaveData wd;
             wd.peak.assign ((std::size_t) bins, 0.0f);
             wd.clean.assign ((std::size_t) bins, 0);
@@ -213,9 +319,10 @@ public:
 
         engine::synthesis::AmbienceRenderer renderer;
         engine::model::AmbienceModelPtr model;
-        float lastThreshold = -1.0f, lastSpeech = -1.0f;
-        int lastGen = -1, lastManualGen = -1;
-        bool lastManual = false;
+        juce::AudioBuffer<float> learnKept; // the audio the model was built from (for the spectral path)
+        float lastThreshold = -1.0f, lastSpeech = -1.0f, lastFlat = -1.0f, lastMinFill = -1.0f;
+        int lastGen = -1, lastManualGen = -1, lastAutoReq = 0;
+        bool lastManual = false, lastStat = false;
 
         // Last rendered seamless loop BEFORE any output/normalize gain, plus its measured levels.
         // Keeping it lets a Normalize/target change re-scale + re-publish without a full re-render.
@@ -275,50 +382,250 @@ public:
             const bool whole = ss.wholeFile.load();
             if (whole != lastWhole)
             {
-                readSource (whole ? 900.0 : 240.0);
+                readSource (whole ? 1.0e9 : 600.0);
                 lastWhole = whole;
                 model = nullptr; // force re-analyze with the new window
             }
 
-            // Re-analyze when an analysis input changes: Threshold, Speech Reject, manual on/off,
-            // or the manual selection itself.
+            // Re-analyze when an analysis input changes: Threshold, Speech Reject, Flatness, Min
+            // Fill, manual on/off, or the manual selection itself.
+            const float flat = ss.flatness.load();
+            const float minf = ss.minFill.load();
+            const bool stat = ss.statisticalMode.load();
             if (model == nullptr || std::abs (thr - lastThreshold) > 1.0e-4f
-                || std::abs (spk - lastSpeech) > 1.0e-4f || manual != lastManual || mGen != lastManualGen)
+                || std::abs (spk - lastSpeech) > 1.0e-4f || std::abs (flat - lastFlat) > 1.0e-4f
+                || std::abs (minf - lastMinFill) > 1.0e-4f || manual != lastManual || mGen != lastManualGen
+                || stat != lastStat)
             {
+                ss.computing.store (true);
                 const auto ranges = manual ? ss.getManualRanges() : std::vector<std::pair<int, int>>{};
                 const bool useManual = manual && ! ranges.empty();
                 const juce::AudioBuffer<float> learnInput = useManual ? buildManual (ranges) : learnSrc;
+                learnKept.makeCopyOf (learnInput); // spectral path re-reads this to band-split
                 model = analyze (thr, learnInput, useManual);
-                lastThreshold = thr; lastSpeech = spk; lastManual = manual; lastManualGen = mGen;
+                lastThreshold = thr; lastSpeech = spk; lastFlat = flat; lastMinFill = minf;
+                lastManual = manual; lastManualGen = mGen; lastStat = stat;
                 needRender = true;
             }
             if (gen != lastGen) { lastGen = gen; needRender = true; }
 
+            // Auto Analyze (spectral editor): compute band edges from the CLEAN room-tone analysis and
+            // publish them. The edges are authoritative in the spectral render, so re-render right away;
+            // the editor mirrors the derived band count onto the Bands knob for display.
+            const int autoReq = ss.autoBandsRequest.load();
+            if (autoReq != lastAutoReq)
+            {
+                lastAutoReq = autoReq;
+                if (model != nullptr)
+                {
+                    const auto& cap = model->cleanAudioPerChannel;
+                    if (! cap.empty() && ! cap[0].empty())
+                    {
+                        const int cn = (int) cap[0].size();
+                        std::vector<float> cm ((std::size_t) cn, 0.0f);
+                        for (const auto& cc : cap)
+                            for (int i = 0; i < juce::jmin (cn, (int) cc.size()); ++i) cm[(std::size_t) i] += cc[(std::size_t) i];
+                        if (cap.size() > 1) for (auto& v : cm) v /= (float) cap.size();
+                        auto autoEdges = tonefill::dsp::autoBandEdges (cm.data(), cn, sampleRate, 12);
+                        if (! autoEdges.empty()) { ss.setSpectralEdges (autoEdges); needRender = true; }
+                    }
+                }
+            }
+
             if (needRender && model != nullptr)
             {
+                ss.computing.store (true);
                 engine::model::RenderSettings s;
-                s.mode = (engine::model::Mode) juce::jlimit (0, 3, ss.mode.load());
-                s.tonalRetention = ss.tonalRetention.load();
-                s.textureAmount = ss.textureAmount.load();
-                s.movement = ss.movement.load();
-                s.fragmentMs = 200.0f + ss.fragment.load() * 2800.0f;   // 200..3000 ms
+                s.mode = engine::model::Mode::Ambience; // only exposed mode
+                s.paulStretch = ss.paulStretch.load();  // Enhance
+                // Chunk Size was removed from the UI: the grain-join machinery (join cost, zero-cross
+                // anchoring, Hann overlap, anti-repeat) hides grain boundaries, so grain length was
+                // inaudible for stationary room tone, and grainCloud caps it to srcLen/4 anyway. Pin a
+                // sensible length; grainCloud still adapts it down for short captures.
+                s.fragmentMs = 700.0f;
                 s.blendFrac  = 0.05f + ss.blend.load() * 0.45f;          // 5..50 %
                 s.randomness = ss.randomness.load();
                 s.seed = ss.seed.load();
-                // Loop length grows with Variation so the exact repeat happens far less often
-                // (the main cause of the "looped" feel on short samples).
-                const double loopSec = 15.0 + (double) s.randomness * 45.0;  // 15..60 s
+                // Loop length is DECOUPLED from Smoothness (S7.1). It now scales with how much clean
+                // material we actually have: more source -> a longer loop before the exact repeat, so
+                // the "looped" feel dissolves on rich captures while short ones stay compact. Turning
+                // Smoothness no longer changes the loop length.
+                const double availSec = (double) model->learnMaterialSeconds;
+                // Quality over speed: allow a longer non-repeating loop when there's material for it
+                // (scales with clean seconds, so short captures still stay compact). Was capped at 60 s.
+                const double loopSec  = juce::jlimit (15.0, 120.0, availSec * 4.0);
                 const int loopLen = (int) (loopSec * sampleRate);
                 const int xf = (int) (0.25 * sampleRate); // 250 ms seamless-loop crossfade
                 s.targetSampleRate = sampleRate;
                 s.targetChannels = effCh;
                 s.targetDurationSamples = (long long) (loopLen + xf);
 
-                auto out = renderer.render (*model, s, cancel);
-                if (out.ok())
-                {
-                    auto chans = std::move (out.value().channels);
+                std::vector<std::vector<float>> chans;
+                bool haveChans = false;
 
+                if (ss.spectralMode.load())
+                {
+                    // Spectral Mosaic: split the analysed source into Linkwitz-Riley bands and select
+                    // + synthesize each band independently, then sum. Room tone is near-stationary
+                    // per band, so per-band loops are steadier than one broadband loop, and each band
+                    // (especially the low one, where a room shift is most audible) gets its own clean
+                    // selection instead of needing every band clean at the same instant.
+                    // Band count is user-set (the "Bands" knob): fewer = wider bands, more = narrower.
+                    // Edges are geometric across 150..8000 Hz (default 7 bands ~ the standard split),
+                    // with the sub-150 and >8000 anchor bands kept at the ends.
+                    int nBands = juce::jlimit (3, 12, ss.spectralBands.load());
+                    std::vector<double> edges;
+                    // Advanced with explicit edges from the spectral editor (hand-placed OR Auto Analyze):
+                    // the edges are authoritative and define the band count. Otherwise a geometric
+                    // 150..8000 Hz spread sized to the Bands knob.
+                    if (ss.spectralAdvanced.load())
+                    {
+                        auto ue = ss.getSpectralEdges();
+                        if (! ue.empty())
+                        {
+                            std::sort (ue.begin(), ue.end());
+                            for (float f : ue) edges.push_back (juce::jlimit (20.0, sampleRate * 0.49, (double) f));
+                            nBands = juce::jlimit (3, 12, (int) edges.size() + 1);
+                            if ((int) edges.size() > nBands - 1) edges.resize ((std::size_t) (nBands - 1));
+                        }
+                    }
+                    if ((int) edges.size() != nBands - 1)
+                    {
+                        edges.clear();
+                        const int nEdges = nBands - 1;
+                        const double lo = 150.0, hi = 8000.0;
+                        for (int e = 0; e < nEdges; ++e)
+                        {
+                            const double t = nEdges > 1 ? (double) e / (double) (nEdges - 1) : 0.0;
+                            edges.push_back (lo * std::pow (hi / lo, t));
+                        }
+                    }
+                    const int outN = (int) s.targetDurationSamples;
+                    const int srcN = learnKept.getNumSamples();
+                    if (srcN > 0 && outN > 0)
+                    {
+                        // Mono-collapse the analysed source, then band-split it.
+                        std::vector<float> mono ((std::size_t) srcN, 0.0f);
+                        const int lc = juce::jmax (1, learnKept.getNumChannels());
+                        for (int c = 0; c < lc; ++c)
+                        {
+                            const float* p = learnKept.getReadPointer (c);
+                            for (int i = 0; i < srcN; ++i) mono[(std::size_t) i] += p[i];
+                        }
+                        if (lc > 1) for (auto& v : mono) v /= (float) lc;
+
+                        auto bands = tonefill::dsp::splitBands (mono.data(), srcN, sampleRate, edges);
+                        std::vector<float> accMono ((std::size_t) outN, 0.0f);
+
+                        // UI waveform overlay for spectral: the UNION of every band's clean selection,
+                        // so the highlight reflects that material is harvested per-band from across the
+                        // whole file (not just the one broadband-clean stretch). Auto mode only (manual
+                        // draws its own selection); band ranges are in src-sample coords (learnKept==src).
+                        const int  waveBins = 2000;
+                        const int  wper = juce::jmax (1, n / waveBins);
+                        std::vector<char> waveUnion ((std::size_t) waveBins, 0);
+
+                        // Target timbre = the CLEAN room tone's spectral balance, measured full-band on
+                        // the audio the broadband analysis already selected -- NOT the whole source's
+                        // band energy, which is dominated by dialogue in the mid bands and would pump
+                        // those bands up (too loud / wrong colour). Split the clean reference into the
+                        // same bands and match each synthesized band to its clean-reference level.
+                        std::vector<float> targetBandRms ((std::size_t) nBands, 0.0f);
+                        bool haveCleanRef = false;
+                        {
+                            const auto& cap = model->cleanAudioPerChannel;
+                            if (! cap.empty() && ! cap[0].empty())
+                            {
+                                const int cn = (int) cap[0].size();
+                                std::vector<float> cleanMono ((std::size_t) cn, 0.0f);
+                                for (const auto& cc : cap)
+                                    for (int i = 0; i < juce::jmin (cn, (int) cc.size()); ++i)
+                                        cleanMono[(std::size_t) i] += cc[(std::size_t) i];
+                                if (cap.size() > 1) for (auto& v : cleanMono) v /= (float) cap.size();
+
+                                auto cleanBands = tonefill::dsp::splitBands (cleanMono.data(), cn, sampleRate, edges);
+                                for (std::size_t bi = 0; bi < cleanBands.size() && bi < targetBandRms.size(); ++bi)
+                                {
+                                    double e = 0.0; for (float v : cleanBands[bi]) e += (double) v * v;
+                                    targetBandRms[bi] = (float) std::sqrt (e / juce::jmax (1, (int) cleanBands[bi].size()));
+                                }
+                                haveCleanRef = true;
+                            }
+                        }
+
+                        for (std::size_t bi = 0; bi < bands.size() && ! cancel.load(); ++bi)
+                        {
+                            const auto& band = bands[bi];
+
+                            // Gain target: the clean room tone's level in this band. Fall back to the
+                            // whole-band level only if no clean reference was found.
+                            float target = (bi < targetBandRms.size()) ? targetBandRms[bi] : 0.0f;
+                            if (! haveCleanRef)
+                            {
+                                double se = 0.0; for (float v : band) se += (double) v * v;
+                                target = (float) std::sqrt (se / juce::jmax (1, srcN));
+                            }
+                            if (target < 1.0e-7f) continue; // this band is silent in the room tone
+
+                            juce::AudioBuffer<float> bandBuf (1, srcN);
+                            std::copy (band.begin(), band.end(), bandBuf.getWritePointer (0));
+                            auto bandModel = analyze (thr, bandBuf, false, /*updateStatus*/ false);
+                            if (bandModel == nullptr) continue;
+
+                            // Fold this band's selected ranges into the UI union overlay.
+                            for (const auto& cr : bandModel->cleanRanges)
+                            {
+                                const int b0 = juce::jlimit (0, waveBins - 1, cr.first / wper);
+                                const int b1 = juce::jlimit (0, waveBins - 1, (cr.second - 1) / wper);
+                                for (int bIdx = b0; bIdx <= b1; ++bIdx) waveUnion[(std::size_t) bIdx] = 1;
+                            }
+
+                            engine::model::RenderSettings sb = s;
+                            sb.targetChannels = 1;
+                            sb.seed = s.seed ^ (0x9E3779B97F4A7C15ULL * (std::uint64_t) (bi + 1));
+                            auto br = renderer.render (*bandModel, sb, cancel);
+                            if (! br.ok() || br.value().channels.empty()) continue;
+                            const auto& bc = br.value().channels[0];
+
+                            // Scale the synthesized band to the clean-reference band level, then sum ->
+                            // the composite reproduces the room tone's spectral balance (LR bands sum flat).
+                            double oe = 0.0; for (float v : bc) oe += (double) v * v;
+                            const float outRms = (float) std::sqrt (oe / juce::jmax (1, (int) bc.size()));
+                            const float g = outRms > 1.0e-9f ? target / outRms : 0.0f;
+                            const int m2 = juce::jmin (outN, (int) bc.size());
+                            for (int i = 0; i < m2; ++i) accMono[(std::size_t) i] += bc[(std::size_t) i] * g;
+                        }
+
+                        if (! cancel.load()) { chans.assign ((std::size_t) effCh, accMono); haveChans = true; }
+
+                        // Publish the union overlay (Auto mode only; manual paints its own selection).
+                        if (! cancel.load() && ! manual)
+                        {
+                            tonefill::plugin::SessionState::WaveData wd;
+                            wd.peak.assign ((std::size_t) waveBins, 0.0f);
+                            wd.clean = std::move (waveUnion);
+                            const float* s0 = src.getReadPointer (0);
+                            for (int b = 0; b < waveBins; ++b)
+                            {
+                                float pk = 0.0f;
+                                const int from = b * wper, to = juce::jmin (from + wper, n);
+                                for (int i = from; i < to; ++i) pk = juce::jmax (pk, std::fabs (s0[i]));
+                                wd.peak[(std::size_t) b] = pk;
+                            }
+                            ss.setWave (std::move (wd));
+                        }
+                    }
+                    araLog ("spectral render: bands=" + juce::String ((int) edges.size() + 1)
+                            + " outN=" + juce::String (outN));
+                }
+                else
+                {
+                    auto out = renderer.render (*model, s, cancel);
+                    if (out.ok()) { chans = std::move (out.value().channels); haveChans = true; }
+                }
+
+                if (haveChans)
+                {
                     // Make the loop seamless: blend the continuation tail [loopLen, loopLen+xf)
                     // back over the head [0, xf), so wrapping loopLen-1 -> 0 has no click.
                     for (auto& c : chans)
@@ -357,6 +664,7 @@ public:
             lastNorm       = ss.normalizeEnabled.load();
             lastNormTarget = ss.normalizeTarget.load();
             lastNormUnit   = ss.normalizeLufs.load();
+            ss.computing.store (false);
             wait (100);
         }
     }
@@ -372,7 +680,7 @@ private:
 //==============================================================================
 ToneFillPlaybackRenderer::ToneFillPlaybackRenderer (ARA::PlugIn::DocumentController* dc,
                                                     ProcessingLockInterface& lock)
-    : juce::ARAPlaybackRenderer (dc), lockInterface (lock)
+    : juce::ARAPlaybackRenderer (dc), lockInterface (lock), documentController_ (dc)
 {
 }
 
@@ -394,12 +702,22 @@ void ToneFillPlaybackRenderer::prepareToPlay (double sampleRateIn, int maxBlockI
             + " ch=" + juce::String (numChannels) + " started=" + juce::String ((int) analysisStarted.load()));
 
     // Kick off analysis once, from the first region's source (off the audio thread).
-    if (! analysisStarted.load() && state_ != nullptr)
+    if (! analysisStarted.load())
     {
         for (const auto playbackRegion : getPlaybackRegions())
         {
             if (auto* source = playbackRegion->getAudioModification()->getAudioSource())
             {
+                // Publish to the state the document controller shares for this source, so the
+                // editor sees us even when the host put it on a different instance (the usual
+                // case outside Reaper). Falls back to whatever didBindToARA handed us.
+                if (auto* dc = specialisedDocumentController (documentController_))
+                    if (auto shared = dc->stateForSource (source))
+                        state_ = std::move (shared);
+
+                if (state_ == nullptr)
+                    break;
+
                 analysisStarted.store (true);
                 araLog ("prepareToPlay: starting worker");
                 worker = std::make_unique<FillWorker> (
@@ -443,7 +761,19 @@ bool ToneFillPlaybackRenderer::processBlock (juce::AudioBuffer<float>& buffer,
 
     buffer.clear(); // default: silence until the fill is ready / when not playing
 
-    if (! fillReady.load (std::memory_order_acquire) || ! positionInfo.getIsPlaying())
+    if (! positionInfo.getIsPlaying())
+        return true;
+
+    // Bypass A/B: play the source instead of the fill.
+    if (state_ != nullptr && state_->bypass.load())
+    {
+        double psr = sampleRate;
+        if (auto sp = state_->getSourcePreview (psr))
+            tileSourcePreview (buffer, sampleRate, getPlaybackRegions(), positionInfo, *sp);
+        return true;
+    }
+
+    if (! fillReady.load (std::memory_order_acquire))
         return true;
 
     std::shared_ptr<const FillData> data;
@@ -457,6 +787,21 @@ bool ToneFillPlaybackRenderer::processBlock (juce::AudioBuffer<float>& buffer,
     const auto numSamples = buffer.getNumSamples();
     const auto timeInSamples = positionInfo.getTimeInSamples().orFallback (0);
     const auto blockRange = juce::Range<juce::int64>::withStartAndLength (timeInSamples, (juce::int64) numSamples);
+
+    static std::atomic<bool> loggedPBrates { false };
+    if (! loggedPBrates.exchange (true))
+    {
+        long long regionSpan = 0;
+        for (const auto* r : getPlaybackRegions())
+        { regionSpan = r->getSampleRange (sampleRate, juce::ARAPlaybackRegion::IncludeHeadAndTail::no).getLength(); break; }
+        araLog ("PB rates: playbackSr=" + juce::String (sampleRate)
+                + " fillLen=" + juce::String ((double) data->length)
+                + " fillDur=" + juce::String (data->length / juce::jmax (1.0, sampleRate)) + "s"
+                + " regionSpan=" + juce::String ((double) regionSpan)
+                + " timeInSamples=" + juce::String ((double) timeInSamples)
+                + " bufCh=" + juce::String (buffer.getNumChannels())
+                + " fillCh=" + juce::String ((int) data->channels.size()));
+    }
 
     for (const auto playbackRegion : getPlaybackRegions())
     {
@@ -483,6 +828,34 @@ bool ToneFillPlaybackRenderer::processBlock (juce::AudioBuffer<float>& buffer,
         }
     }
 
+    // Enhance-only PARAMETRIC EQ: a live 5-band biquad chain (replaces the old de-hiss low-pass).
+    // Active only when Enhance AND the EQ master (hissFilter) are on. Per-band coefficients are
+    // rebuilt only when that band's settings change.
+    if (state_ != nullptr && state_->hissFilter.load() && state_->paulStretch.load())
+    {
+        const int nCh = buffer.getNumChannels();
+        if ((int) eqFilters_.size() < nCh) eqFilters_.resize ((std::size_t) nCh);
+        for (int b = 0; b < kEqBands; ++b)
+        {
+            const bool  on   = state_->eqBandOn[b].load();
+            const int   type = state_->eqBandType[b].load();
+            const float freq = juce::jlimit (20.0f, (float) (sampleRate * 0.49), state_->eqBandFreq[b].load());
+            const float gain = juce::jlimit (-18.0f, 18.0f, state_->eqBandGain[b].load());
+            const float q    = juce::jlimit (0.1f, 10.0f, state_->eqBandQ[b].load());
+            auto& cache = eqCache_[(std::size_t) b];
+            if (cache.on != on || cache.type != type || std::abs (cache.freq - freq) > 0.5f
+                || std::abs (cache.gain - gain) > 1.0e-3f || std::abs (cache.q - q) > 1.0e-3f)
+            {
+                const auto co = tonefill::dsp::makeEqCoefficients (sampleRate, type, freq, gain, q);
+                for (auto& chain : eqFilters_) chain[(std::size_t) b].setCoefficients (co);
+                cache = { on, type, freq, gain, q };
+            }
+            if (! on) continue;
+            for (int ch = 0; ch < nCh; ++ch)
+                eqFilters_[(std::size_t) ch][(std::size_t) b].processSamples (buffer.getWritePointer (ch), numSamples);
+        }
+    }
+
     // Output gain + meter. When Normalize is on the fill is already baked to target, so the
     // live manual gain is bypassed (unity).
     const float gain = (state_ != nullptr && ! state_->normalizeEnabled.load())
@@ -499,6 +872,111 @@ bool ToneFillPlaybackRenderer::processBlock (juce::AudioBuffer<float>& buffer,
     }
     if (state_ != nullptr)
         state_->outMeterDb.store (peak > 1.0e-6f ? 20.0f * std::log10 (peak) : -120.0f);
+
+    // Trial expired + not activated: mute the room-tone output (the editor also forces the activation
+    // overlay). During the trial everything plays normally.
+    if (tonefill::licensing::LicenseManager::getInstance().isExpired())
+    {
+        buffer.clear();
+        if (state_ != nullptr) state_->outMeterDb.store (-120.0f);
+    }
+
+    return true;
+}
+
+//==============================================================================
+ToneFillEditorRenderer::ToneFillEditorRenderer (ARA::PlugIn::DocumentController* dc,
+                                                ProcessingLockInterface& lock)
+    : juce::ARAEditorRenderer (dc), lockInterface (lock), documentController_ (dc)
+{
+}
+
+void ToneFillEditorRenderer::prepareToPlay (double sampleRateIn, int, int,
+                                            juce::AudioProcessor::ProcessingPrecision,
+                                            AlwaysNonRealtime)
+{
+    sampleRate = sampleRateIn;
+    araLog ("editorRenderer prepareToPlay: regions=" + juce::String ((int) getPlaybackRegions().size()));
+}
+
+bool ToneFillEditorRenderer::processBlock (juce::AudioBuffer<float>& buffer,
+                                           juce::AudioProcessor::Realtime,
+                                           const juce::AudioPlayHead::PositionInfo& positionInfo) noexcept
+{
+    const auto lock = lockInterface.getProcessingLock();
+    if (! lock.isLocked())
+        return true;
+
+    // Resolve the shared per-source state lazily (the region attaches after binding).
+    if (state_ == nullptr)
+        if (auto* dc = specialisedDocumentController (documentController_))
+            for (const auto region : getPlaybackRegions())
+                if (auto* mod = region->getAudioModification())
+                    if (auto* src = mod->getAudioSource())
+                        { state_ = dc->stateForSource (src); break; }
+
+    // Single-instance hosts (e.g. Reaper) put the playback renderer AND this editor renderer on the
+    // SAME plug-in instance, and JUCE runs the playback renderer FIRST -- it has already written the
+    // fill into `buffer` (and set the meter). This editor renderer only owns the regions the host
+    // assigns to the editor role; when it has none (Reaper keeps the region on the playback role) we
+    // must leave `buffer` untouched. A blanket clear here would wipe the playback renderer's output,
+    // giving a silent track even though the meter showed level. Split-role hosts (Nuendo/Cubase) put
+    // the editor renderer on its own instance WITH the region, so the clear+refill below still runs.
+    if (getPlaybackRegions().empty())
+        return true;
+
+    buffer.clear(); // we own these regions: replace the source (silence until the fill exists)
+    if (state_ == nullptr || ! positionInfo.getIsPlaying())
+        return true;
+
+    // Bypass A/B: play the source instead of the fill.
+    if (state_->bypass.load())
+    {
+        double psr = sampleRate;
+        if (auto sp = state_->getSourcePreview (psr))
+            tileSourcePreview (buffer, sampleRate, getPlaybackRegions(), positionInfo, *sp);
+        return true;
+    }
+
+    double fillSr = sampleRate;
+    auto fill = state_->getExportFill (fillSr); // same loop the playback renderer publishes
+    if (fill == nullptr || fill->empty() || (*fill)[0].empty())
+        return true;
+
+    const long long len = (long long) (*fill)[0].size();
+    const auto numSamples = buffer.getNumSamples();
+    const auto timeInSamples = positionInfo.getTimeInSamples().orFallback (0);
+    const auto blockRange = juce::Range<juce::int64>::withStartAndLength (timeInSamples, (juce::int64) numSamples);
+
+    for (const auto region : getPlaybackRegions())
+    {
+        const auto songRange = region->getSampleRange (sampleRate, juce::ARAPlaybackRegion::IncludeHeadAndTail::no);
+        const auto renderRange = blockRange.getIntersectionWith (songRange);
+        if (renderRange.isEmpty())
+            continue;
+
+        const int startInBuffer = (int) (renderRange.getStart() - blockRange.getStart());
+        const int count = (int) renderRange.getLength();
+        const auto regionStart = songRange.getStart();
+
+        for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+        {
+            const auto& srcCh = (*fill)[(std::size_t) juce::jmin (ch, (int) fill->size() - 1)];
+            auto* dst = buffer.getWritePointer (ch);
+            for (int i = 0; i < count; ++i)
+            {
+                long long fpos = (renderRange.getStart() + i - regionStart) % len;
+                if (fpos < 0) fpos += len;
+                dst[startInBuffer + i] = srcCh[(std::size_t) fpos];
+            }
+        }
+    }
+
+    // Live Output gain (Normalize bakes its gain into the published loop; unity when it's on).
+    const float gain = (! state_->normalizeEnabled.load()) ? state_->outputGain.load() : 1.0f;
+    if (std::fabs (gain - 1.0f) > 1.0e-4f)
+        for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+            juce::FloatVectorOperations::multiply (buffer.getWritePointer (ch), gain, numSamples);
 
     return true;
 }
