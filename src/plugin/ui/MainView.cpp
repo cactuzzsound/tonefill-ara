@@ -309,17 +309,24 @@ void MainView::paint (juce::Graphics& g)
     g.fillAll (LNF::bg());
     const auto navy = LNF::navy();
 
-    // Logo (embedded PNG, trimmed to its content bounding box so the transparent margins don't
-    // waste header space), scaled to fit preserving aspect.
+    // Logo lockup: waveform mark + "ToneFill" wordmark (both embedded PNGs, alpha-trimmed once).
     {
-        static const juce::Image logo = []
+        static const juce::Image mark = LNF::alphaTrim (juce::ImageCache::getFromMemory (BinaryData::tonefill_mark_png, BinaryData::tonefill_mark_pngSize));
+        static const juce::Image word = LNF::alphaTrim (juce::ImageCache::getFromMemory (BinaryData::tonefill_word_png, BinaryData::tonefill_word_pngSize));
+        const int top = 8, ih = 40, wh = 24;
+        int x = 16;
+        if (mark.isValid())
         {
-            auto full = juce::ImageCache::getFromMemory (BinaryData::tonefilllogo_png, BinaryData::tonefilllogo_pngSize);
-            return (full.isValid() && full.getWidth() >= 1652) ? full.getClippedImage ({ 331, 462, 1321, 280 }) : full;
-        }();
-        if (logo.isValid())
-            g.drawImageWithin (logo, 16, 10, 264, 42,
+            const int iw = juce::roundToInt (ih * (float) mark.getWidth() / (float) juce::jmax (1, mark.getHeight()));
+            g.drawImageWithin (mark, x, top, iw, ih, juce::RectanglePlacement::centred, false);
+            x += iw + 10;
+        }
+        if (word.isValid())
+        {
+            const int ww = juce::roundToInt (wh * (float) word.getWidth() / (float) juce::jmax (1, word.getHeight()));
+            g.drawImageWithin (word, x, top + (ih - wh) / 2, ww, wh,
                                juce::RectanglePlacement::xLeft | juce::RectanglePlacement::yMid, false);
+        }
     }
 
     // Faint grouped backgrounds behind the three header button clusters.

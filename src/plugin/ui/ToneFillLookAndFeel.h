@@ -40,6 +40,22 @@ public:
         }
     }
 
+    // Crop an image to the bounding box of its non-transparent pixels (so a logo element centred in a
+    // square canvas draws tight in a header slot). Run once and cache — it scans every pixel.
+    static juce::Image alphaTrim (const juce::Image& src)
+    {
+        if (! src.isValid()) return src;
+        const int w = src.getWidth(), h = src.getHeight();
+        juce::Image::BitmapData bd (src, juce::Image::BitmapData::readOnly);
+        int minX = w, minY = h, maxX = -1, maxY = -1;
+        for (int y = 0; y < h; ++y)
+            for (int x = 0; x < w; ++x)
+                if (bd.getPixelColour (x, y).getAlpha() > 8)
+                { minX = juce::jmin (minX, x); minY = juce::jmin (minY, y); maxX = juce::jmax (maxX, x); maxY = juce::jmax (maxY, y); }
+        if (maxX < minX) return src;
+        return src.getClippedImage ({ minX, minY, maxX - minX + 1, maxY - minY + 1 });
+    }
+
     // Small line-art icon inside box b, in colour col.
     static void drawIcon (juce::Graphics& g, juce::Rectangle<float> b, int id, juce::Colour col)
     {

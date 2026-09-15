@@ -278,15 +278,24 @@ void ASView::paint (juce::Graphics& g)
 {
     g.fillAll (LNF::bg());
 
-    // Logo.
+    // Logo lockup: waveform mark + "ToneFill" wordmark (alpha-trimmed once).
     {
-        static const juce::Image logo = []
+        static const juce::Image mark = LNF::alphaTrim (juce::ImageCache::getFromMemory (BinaryData::tonefill_mark_png, BinaryData::tonefill_mark_pngSize));
+        static const juce::Image word = LNF::alphaTrim (juce::ImageCache::getFromMemory (BinaryData::tonefill_word_png, BinaryData::tonefill_word_pngSize));
+        const int top = 8, ih = 34, wh = 21;
+        int x = 14;
+        if (mark.isValid())
         {
-            auto full = juce::ImageCache::getFromMemory (BinaryData::tonefilllogo_png, BinaryData::tonefilllogo_pngSize);
-            return (full.isValid() && full.getWidth() >= 1652) ? full.getClippedImage ({ 331, 462, 1321, 280 }) : full;
-        }();
-        if (logo.isValid())
-            g.drawImageWithin (logo, 14, 10, 220, 36, juce::RectanglePlacement::xLeft | juce::RectanglePlacement::yMid, false);
+            const int iw = juce::roundToInt (ih * (float) mark.getWidth() / (float) juce::jmax (1, mark.getHeight()));
+            g.drawImageWithin (mark, x, top, iw, ih, juce::RectanglePlacement::centred, false);
+            x += iw + 8;
+        }
+        if (word.isValid())
+        {
+            const int ww = juce::roundToInt (wh * (float) word.getWidth() / (float) juce::jmax (1, word.getHeight()));
+            g.drawImageWithin (word, x, top + (ih - wh) / 2, ww, wh,
+                               juce::RectanglePlacement::xLeft | juce::RectanglePlacement::yMid, false);
+        }
     }
 
     // Grouped header background behind Classic|Experimental|Spectral.

@@ -81,7 +81,8 @@ endif()
 # Knob film-strip skin (Modern_4): embedded so the build needs no runtime asset path.
 juce_add_binary_data(ToneFillAssets SOURCES
     ${CMAKE_SOURCE_DIR}/assets/knob_modern.png
-    ${CMAKE_SOURCE_DIR}/assets/tonefilllogo.png)
+    ${CMAKE_SOURCE_DIR}/assets/tonefill_mark.png
+    ${CMAKE_SOURCE_DIR}/assets/tonefill_word.png)
 set_target_properties(ToneFillAssets PROPERTIES POSITION_INDEPENDENT_CODE TRUE)
 
 target_compile_definitions(ToneFillPlugin PUBLIC
